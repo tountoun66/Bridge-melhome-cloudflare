@@ -22,7 +22,7 @@ function getSetting(clim, keys) {
     const containers = [];
     if (Array.isArray(clim.settings)) containers.push(clim.settings);
     if (Array.isArray(clim.unitSettings)) containers.push(clim.unitSettings);
-    
+
     for (let container of containers) {
         for (let item of container) {
             const itemName = String(item.name || item.Name || "").toLowerCase();
@@ -54,10 +54,10 @@ function getTemp(clim) {
 
 function getGoogleMode(clim) {
     if (!isPoweredOn(clim)) return "off"; 
-    
+
     const val = getSetting(clim, ["operationMode", "OperationMode"]);
     const mode = String(val || "Automatic").toLowerCase();
-    
+
     if (mode.includes("cool")) return "cool";
     if (mode.includes("heat")) return "heat";
     if (mode.includes("dry")) return "dry";
@@ -69,7 +69,7 @@ function getGoogleFanSpeed(clim) {
     const val = getSetting(clim, ["setFanSpeed", "SetFanSpeed", "fanSpeed", "FanSpeed"]);
     if (val === undefined || val === null) return "Auto";
     const str = String(val).toLowerCase();
-    
+
     if (str.includes("one") || str === "1") return "One";
     if (str.includes("two") || str === "2") return "Two";
     if (str.includes("three") || str === "3") return "Three";
@@ -78,24 +78,46 @@ function getGoogleFanSpeed(clim) {
     return "Auto";
 }
 
+// --- SYSTEME DE RELANCE AUTOMATIQUE (RETRY) ---
 async function fetchMelcloudDevices(cookie) {
     const xsrf = extractXsrf(cookie);
     const safeCookie = cookie.trim().replace(/\n|\r/g, "");
-    
-    const response = await fetch("https://melcloudhome.com/api/user/context", {
-        method: 'GET',
-        headers: {
-            "Cookie": safeCookie,
-            "X-XSRF-TOKEN": xsrf,
-            "X-Csrf": "1",
-            "X-Requested-With": "XMLHttpRequest",
-            "Accept": "application/json, text/plain, */*"
+
+    const maxRetries = 2; // 3 tentatives en tout
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+            const response = await fetch("https://melcloudhome.com/api/user/context", {
+                method: 'GET',
+                headers: {
+                    "Cookie": safeCookie,
+                    "X-XSRF-TOKEN": xsrf,
+                    "X-Csrf": "1",
+                    "X-Requested-With": "XMLHttpRequest",
+                    "Accept": "application/json, text/plain, */*"
+                }
+            });
+
+            if (!response.ok) {
+                if (response.status === 500 && attempt < maxRetries) {
+                    console.warn(`[MELCloud] Liste appareils: Erreur 500 reçue. Retentative (${attempt + 1}/${maxRetries})...`);
+                    await new Promise(res => setTimeout(res, 800)); // Pause de 0.8s
+                    continue; 
+                }
+                throw new Error("Erreur de connexion API HTTP " + response.status);
+            }
+
+            const data = await response.json();
+            return (data.buildings && data.buildings.length > 0) ? (data.buildings[0].airToAirUnits || []) : [];
+
+        } catch (error) {
+            if (attempt === maxRetries) {
+                console.error("[MELCloud] Liste appareils: Échec définitif :", error.message);
+                throw error; 
+            }
+            await new Promise(res => setTimeout(res, 800));
         }
-    });
-    
-    if (!response.ok) throw new Error("Erreur de connexion API HTTP " + response.status);
-    const data = await response.json();
-    return (data.buildings && data.buildings.length > 0) ? (data.buildings[0].airToAirUnits || []) : [];
+    }
 }
 
 app.post('/api/save-cookie', (req, res) => {
@@ -128,12 +150,12 @@ app.get('/oauth/auth', (req, res) => {
 app.post('/oauth/login', (req, res) => {
     const { pairCode, redirect_uri, state } = req.body;
     let userCookie = pairCodes[pairCode] || pairCodes["master_cookie"];
-    
+
     if (!userCookie) return res.send("Erreur : Code invalide.");
 
     const authCode = "auth_" + Math.random().toString(36).substr(2, 9);
     pairCodes[authCode] = userCookie; 
-    
+
     const separator = redirect_uri.includes('?') ? '&' : '?';
     res.redirect(`${redirect_uri}${separator}code=${authCode}&state=${state || ''}`);
 });
@@ -141,7 +163,7 @@ app.post('/oauth/login', (req, res) => {
 app.all('/oauth/token', (req, res) => {
     const code = req.body.code || req.query.code;
     let userCookie = pairCodes[code] || pairCodes["master_cookie"];
-    
+
     if (!userCookie) return res.status(400).json({ error: "invalid_grant" });
 
     const accessToken = Buffer.from(userCookie).toString('base64');
@@ -155,7 +177,7 @@ app.post('/fulfillment', async (req, res) => {
     const authHeader = req.headers.authorization;
 
     if (!authHeader) return res.status(401).send("Non autorisé");
-    
+
     let userCookie = "";
     try {
         userCookie = Buffer.from(authHeader.split(' ')[1], 'base64').toString('utf-8');
@@ -213,7 +235,7 @@ app.post('/fulfillment', async (req, res) => {
                     currentFanSpeedSetting: getGoogleFanSpeed(clim)
                 };
             });
-            
+
             return res.json({ requestId, payload: { devices: devicesState } });
         }
 
@@ -222,7 +244,7 @@ app.post('/fulfillment', async (req, res) => {
             const clims = await fetchMelcloudDevices(userCookie);
             const xsrf = extractXsrf(userCookie);
             const safeCookie = userCookie.trim().replace(/\n|\r/g, "");
-            
+
             const responseCommands = [];
 
             for (let command of commands) {
@@ -231,7 +253,6 @@ app.post('/fulfillment', async (req, res) => {
                     const currentDeviceData = clims.find(c => (c.id || c.ID).toString() === climId);
                     if (!currentDeviceData) continue;
 
-                    // LE PAQUET PARFAIT : Basé sur votre capture d'écran exacte
                     let payloadJson = {
                         power: null,
                         operationMode: null,
@@ -249,7 +270,7 @@ app.post('/fulfillment', async (req, res) => {
                         thermostatTemperatureSetpoint: getTemp(currentDeviceData),
                         currentFanSpeedSetting: getGoogleFanSpeed(currentDeviceData)
                     };
-                    
+
                     command.execution.forEach(exec => {
                         if (exec.command === 'action.devices.commands.OnOff') {
                             payloadJson.power = exec.params.on;
@@ -273,38 +294,69 @@ app.post('/fulfillment', async (req, res) => {
                                 if (mode === "auto") payloadJson.operationMode = "Automatic";
                             }
                         }
-                        // LA CORRECTION : "SetFanSpeed" (au lieu de FanSpeed)
                         if (exec.command === 'action.devices.commands.SetFanSpeed') {
-                            const targetSpeed = exec.params.fanSpeed; // "One", "Two", "Auto"...
+                            const targetSpeed = exec.params.fanSpeed; 
                             payloadJson.setFanSpeed = targetSpeed;
                             updatedStates.currentFanSpeedSetting = targetSpeed;
                         }
                     });
 
-                    await fetch(`https://melcloudhome.com/api/ataunit/${climId}`, {
-                        method: 'PUT',
-                        headers: {
-                            "Content-Type": "application/json; charset=utf-8",
-                            "Cookie": safeCookie,
-                            "X-XSRF-TOKEN": xsrf,
-                            "X-Csrf": "1",
-                            "X-Requested-With": "XMLHttpRequest",
-                            "Accept": "application/json, text/plain, */*"
-                        },
-                        body: JSON.stringify(payloadJson)
-                    });
+                    // --- RETRY SUR L'EXECUTION DE COMMANDE ---
+                    let commandSuccess = false;
+                    for (let attempt = 0; attempt <= 2; attempt++) {
+                        try {
+                            const res = await fetch(`https://melcloudhome.com/api/ataunit/${climId}`, {
+                                method: 'PUT',
+                                headers: {
+                                    "Content-Type": "application/json; charset=utf-8",
+                                    "Cookie": safeCookie,
+                                    "X-XSRF-TOKEN": xsrf,
+                                    "X-Csrf": "1",
+                                    "X-Requested-With": "XMLHttpRequest",
+                                    "Accept": "application/json, text/plain, */*"
+                                },
+                                body: JSON.stringify(payloadJson)
+                            });
 
-                    responseCommands.push({
-                        ids: [climId],
-                        status: "SUCCESS",
-                        states: updatedStates
-                    });
+                            if (res.ok) {
+                                commandSuccess = true;
+                                break;
+                            }
+
+                            if (res.status === 500 && attempt < 2) {
+                                console.warn(`[MELCloud] Commande: Erreur 500. Retentative (${attempt + 1}/2)...`);
+                                await new Promise(r => setTimeout(r, 800));
+                                continue;
+                            }
+
+                            break;
+                        } catch (e) {
+                            if (attempt < 2) {
+                                await new Promise(r => setTimeout(r, 800));
+                                continue;
+                            }
+                        }
+                    }
+
+                    if (commandSuccess) {
+                        responseCommands.push({
+                            ids: [climId],
+                            status: "SUCCESS",
+                            states: updatedStates
+                        });
+                    } else {
+                        responseCommands.push({
+                            ids: [climId],
+                            status: "ERROR",
+                            errorCode: "hardError"
+                        });
+                    }
                 }
             }
             return res.json({ requestId, payload: { commands: responseCommands } });
         }
     } catch (error) {
-        console.error("Erreur d'exécution :", error);
+        console.error("Erreur d'exécution globale :", error);
         return res.json({ requestId, payload: { errorCode: "hardError" } });
     }
 });
