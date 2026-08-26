@@ -54,7 +54,6 @@ async function checkBasicAuth(request, env) {
     const credentials = atob(match[1]);
     const [user, pass] = credentials.split(":");
 
-    // Récupération des identifiants depuis la table app_config de D1
     const dbUser = await env.DB.prepare("SELECT value FROM app_config WHERE key = 'admin_user'").first();
     const dbPass = await env.DB.prepare("SELECT value FROM app_config WHERE key = 'admin_pass'").first();
 
@@ -323,14 +322,19 @@ function getGoogleMode(clim) {
 }
 
 function getGoogleFanSpeed(clim) {
-  const val = getSetting(clim, ['setFanSpeed', 'SetFanSpeed', 'ActualFanSpeed']);
-  if (!val) return 'Auto';
-  const str = String(val).toLowerCase();
-  if (str.includes('one') || str === '1') return 'One';
-  if (str.includes('two') || str === '2') return 'Two';
-  if (str.includes('three') || str === '3') return 'Three';
-  if (str.includes('four') || str === '4') return 'Four';
-  if (str.includes('five') || str === '5') return 'Five';
+  // Lecture prioritaire de la vitesse réelle (ActualFanSpeed), puis de la consigne
+  const val = getSetting(clim, ['ActualFanSpeed', 'actualFanSpeed', 'SetFanSpeed', 'setFanSpeed', 'fanSpeed', 'FanSpeed']);
+  if (val === undefined || val === null) return 'Auto';
+  
+  const str = String(val).trim().toLowerCase();
+  
+  if (str === 'auto' || str === 'automatic') return 'Auto';
+  if (str === 'one' || str === '1' || str === 'faible') return 'One';
+  if (str === 'two' || str === '2') return 'Two';
+  if (str === 'three' || str === '3' || str === 'moyenne') return 'Three';
+  if (str === 'four' || str === '4') return 'Four';
+  if (str === 'five' || str === '5' || str === 'forte' || str === 'max') return 'Five';
+  
   return 'Auto';
 }
 
@@ -406,7 +410,7 @@ export default {
           const climId = u.id ?? u.ID;
           htmlList += `<li style="background:#f5f5f5;margin-bottom:10px;padding:15px;border-radius:5px;">
             <b style="font-size:18px;">${esc(u.givenDisplayName)}</b> - ${isPoweredOn(u) ? "✅ Allumé" : "💤 Éteint"}<br>
-            <span style="color:#555">Mode : ${getGoogleMode(u)} | Consigne : ${getTemp(u)}°C | Pièce : ${getRoomTemp(u)}°C</span><br><br>
+            <span style="color:#555">Mode : ${getGoogleMode(u)} | Consigne : ${getTemp(u)}°C | Pièce : ${getRoomTemp(u)}°C | Vent : ${getGoogleFanSpeed(u)}</span><br><br>
             
             <button id="btn-on-${climId}" onclick="sendCmd('${climId}', true)" style="padding:8px 12px;background:#4CAF50;color:white;border:none;border-radius:4px;cursor:pointer;margin-right:10px;">🟢 Allumer</button>
             <button id="btn-off-${climId}" onclick="sendCmd('${climId}', false)" style="padding:8px 12px;background:#F44336;color:white;border:none;border-radius:4px;cursor:pointer;">🔴 Éteindre</button>
@@ -601,7 +605,7 @@ export default {
                 }
                 if (exec.command === "action.devices.commands.SetFanSpeed") {
                   payloadJson.setFanSpeed = exec.params?.fanSpeed;
-                  updatedStates.currentFanSpeedSetting = payloadJson.setFanSpeed;
+                  updatedStates.currentFanSpeedSetting = exec.params?.fanSpeed;
                 }
               }
 
