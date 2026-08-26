@@ -322,7 +322,11 @@ function getGoogleMode(clim) {
 }
 
 function getGoogleFanSpeed(clim) {
-  const val = getSetting(clim, ['ActualFanSpeed', 'actualFanSpeed', 'FanSpeed', 'fanSpeed', 'SetFanSpeed', 'setFanSpeed']);
+  const actual = getSetting(clim, ['ActualFanSpeed', 'actualFanSpeed']);
+  const set = getSetting(clim, ['SetFanSpeed', 'setFanSpeed', 'FanSpeed', 'fanSpeed']);
+  
+  const val = (actual !== undefined && actual !== null && String(actual).toLowerCase() !== 'auto') ? actual : (set !== undefined && set !== null ? set : actual);
+
   if (val === undefined || val === null) return 'Auto';
   
   if (val === 1 || val === '1') return 'One';
