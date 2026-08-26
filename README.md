@@ -1,33 +1,77 @@
-❄️ MELCloud Home to Google Home Bridge (via Cloudflare)
-This project allows you to connect your Mitsubishi air conditioners (using the new MELCloud Home app) to Google Home. It relies on a free Cloudflare Worker to act as a seamless bridge between Mitsubishi's undocumented mobile API and Google's Smart Home servers, keeping your connection alive autonomously.
+# ❄️ MELCloud Home → Google Home Bridge
 
-📋 Prerequisites
-Before you begin, make sure you have:
+Connect your **Mitsubishi Electric air conditioners** using the new **MELCloud Home** app to **Google Home** through a Cloudflare Worker.
 
-Your MELCloud Home app credentials (email and password).
+This project acts as a bridge between Mitsubishi's undocumented **MELCloud Home mobile API** and **Google Smart Home**, allowing you to control your air conditioners from Google Home.
 
-A free Cloudflare account (cloudflare.com).
+The bridge can persist your authentication tokens using **Cloudflare D1**, so you don't have to manually log in again every time the Worker restarts.
 
-A Google account (the same one used in the Google Home app on your phone).
+---
 
-🛠️ Step 1: Create the Database (Cloudflare D1)
-The script needs a small database to securely save your session tokens so you don't have to re-enter your password every day.
+## ✨ Features
+
+* 🌡️ Control Mitsubishi Electric air conditioners from Google Home
+* 🔌 Turn air conditioners on and off
+* 🌡️ Set the target temperature
+* 🏠 Assign devices to Google Home rooms
+* 🔐 MELCloud Home authentication
+* 💾 Persistent OAuth/session tokens using Cloudflare D1
+* 🔄 Automatic session reuse
+* ☁️ Runs entirely on Cloudflare Workers
+* 🔒 HTTP Basic Authentication for the administration interface
+* 🚫 No MELCloud credentials hardcoded in the source code
+
+---
+
+# 📋 Requirements
+
+Before getting started, make sure you have:
+
+* A **MELCloud Home account**
+* Your MELCloud Home email address and password
+* A free **Cloudflare account**
+* A **Google account**
+* The **Google Home** app installed on your smartphone
+
+You will also need access to the JavaScript source code of this project.
+
+---
+
+# ☁️ Step 1 — Create the Cloudflare D1 Database
+
+The D1 database is used to securely store your authentication tokens.
+
+This allows the bridge to keep your session between Worker restarts without requiring you to enter your MELCloud Home credentials every time.
+
+## 1. Open Cloudflare
 
 Log in to your Cloudflare dashboard.
 
-In the left sidebar, navigate to Workers & Pages > D1 SQL Database.
+From the left-hand menu, go to:
 
-Click the blue Create database button.
+**Workers & Pages → D1 SQL Database**
 
-Give it a name (e.g., melhome-db) and click Create.
+## 2. Create the database
 
-Once created, click on its name to open it.
+Click:
 
-Go to the Console tab.
+**Create database**
 
-Copy and paste the following SQL command into the text area, then click Execute:
+Choose a name, for example:
 
-SQL
+```text
+melhome-db
+```
+
+Then click **Create**.
+
+## 3. Create the token table
+
+Open your newly created database and select the **Console** tab.
+
+Run the following SQL command:
+
+```sql
 CREATE TABLE IF NOT EXISTS oauth_tokens (
   id TEXT PRIMARY KEY,
   access_token TEXT,
@@ -36,105 +80,477 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
-Your database is now ready!
+```
 
-🚀 Step 2: Create the Cloudflare Worker
-The Worker is the brain of the system: it hosts the code and handles the API requests.
+Your D1 database is now ready.
 
-In the left sidebar of Cloudflare, go to Workers & Pages > Overview.
+---
 
-Click Create application, then Create Worker.
+# 🚀 Step 2 — Create the Cloudflare Worker
 
-Give it a name (e.g., melhome-bridge) and click Deploy.
+The Cloudflare Worker is the core of the bridge.
 
-On the confirmation page, click Edit code.
+It communicates with MELCloud Home, handles Google Home requests and manages authentication.
 
-In the editor that opens, delete all existing code and paste the entire JavaScript code of this project.
+## 1. Create the Worker
 
-Click the blue Deploy button in the top right corner.
+In Cloudflare, go to:
 
-🔗 Step 3: Bind the Database to the Worker
-To allow the code to read and write to the database created in Step 1, you need to link them.
+**Workers & Pages → Overview**
 
-Go back to the main page of your Worker (melhome-bridge).
+Then select:
 
-Go to the Settings tab > Bindings (or Variables & Secrets depending on the UI layout).
+**Create application → Create Worker**
 
-Under the "Bindings" section, click Add and choose D1 Database.
+Give the Worker a name, for example:
 
-Fill out the form as follows:
+```text
+melhome-bridge
+```
 
-Variable name: DB (Must be uppercase, this is mandatory)
+Click **Deploy**.
 
-D1 Database: Select melhome-db (created in step 1).
+## 2. Add the project code
 
-Click Deploy.
+Once the Worker has been created:
 
-🔑 Step 4: First Connection to MELCloud
-At the top of your Worker's page, you will see a URL like [https://melhome-bridge.your-username.workers.dev](https://melhome-bridge.your-username.workers.dev). Click on it.
+1. Click **Edit code**
+2. Delete the default code
+3. Paste the complete JavaScript code from this project
+4. Click **Deploy**
 
-You will land on the homepage of your bridge. Click on 🔐 Configure MELCloud.
+Your Worker is now running.
 
-Enter your MELCloud Home credentials and submit.
+---
 
-If a success message appears, click on 🌡️ View my ACs.
+# 🔗 Step 3 — Bind the D1 Database to the Worker
 
-You should see your air conditioners listed with the ability to turn them on or off. Keep your Worker's URL handy, we will need it for the next step.
+The Worker needs access to the D1 database created in Step 1.
 
-🏠 Step 5: Configure the Google Home Action
-Now, you need to tell Google how to talk to your Worker.
+Open your Worker:
 
-Go to the Google Actions Console and log in with your Google account.
+**melhome-bridge → Settings → Bindings**
 
-Click New Project, give it a name (e.g., "My MELCloud ACs"), select your language/country, and click Create project.
+> Depending on the Cloudflare dashboard version, this section may appear under **Variables & Secrets**.
 
-On the next screen, select Smart Home and click Start Building.
+## Add the D1 binding
 
-In the left menu, click Actions.
+Click:
 
-Fill the Fulfillment URL field with your Worker's URL followed by /google/fulfillment:
+**Add → D1 Database**
 
-Example: [https://melhome-bridge.your-username.workers.dev/google/fulfillment](https://melhome-bridge.your-username.workers.dev/google/fulfillment)
+Configure it as follows:
 
-Click Save.
+| Setting       | Value        |
+| ------------- | ------------ |
+| Variable name | `DB`         |
+| D1 Database   | `melhome-db` |
 
-In the left menu, go to Develop > Account linking. Fill in the fields exactly like this:
+⚠️ **The variable name must be exactly `DB` and must be uppercase.**
 
-Client ID: google
+Click **Deploy**.
 
-Client Secret: secret
+---
 
-Authorization URL: https://[YOUR_WORKER_URL]/google/auth
+# 🔑 Step 4 — Connect MELCloud Home
 
-Token URL: https://[YOUR_WORKER_URL]/google/token
+Your Worker will have a URL similar to:
 
-Leave the rest as default and click Save in the top right corner.
+```text
+https://melhome-bridge.your-username.workers.dev
+```
 
-Go to the Test tab (at the top of the screen) to enable your project on your Google account.
+Open this URL in your browser.
 
-📱 Step 6: Link in the Google Home App
-This is the final step!
+You will arrive at the bridge homepage.
 
-Open the Google Home app on your smartphone.
+Click:
 
-Tap the + button in the top left corner.
+**🔐 Configure MELCloud**
 
-Choose Set up device > Works with Google.
+Enter your:
 
-In the search bar, type [test] My MELCloud ACs (or whatever you named your project).
+* MELCloud Home email address
+* MELCloud Home password
 
-Tap on it. A web page will open asking for a security PIN.
+Submit the form.
 
-Enter the default PIN: 1234 and submit.
+## Verify the connection
 
-Success! Google Home will sync your air conditioners. You just need to assign them to your rooms.
+If the login succeeds, click:
 
-You can now control your devices using your voice: "Ok Google, turn on the living room", "Ok Google, set the bedroom temperature to 24 degrees".
+**🌡️ View my ACs**
 
-🛠️ Troubleshooting & FAQ
-Google Home says the device is offline or unavailable.
-It is highly likely that your MELCloud token has been revoked by Mitsubishi (for example, if you changed your password in the official app).
-Solution: Go back to your Cloudflare Worker URL, click "Configure MELCloud," and log in again to fetch a new token. Google Home will immediately start working again.
+You should see your Mitsubishi air conditioners.
 
-Where can I change the "1234" PIN code?
-If you want to secure the linking process, you can change the GOOGLE_HOME_PIN = "1234"; constant at the very top of your Worker's code in Cloudflare, then click Deploy.
+You can use this page to verify that the bridge is communicating correctly with MELCloud Home.
+
+💡 **Keep your Worker URL. You will need it when configuring Google Home.**
+
+---
+
+# 🏠 Step 5 — Configure the Google Home Action
+
+Google Home needs to know where your bridge is located.
+
+## 1. Create a Google project
+
+Open the **Google Actions Console** and sign in with the same Google account you use with Google Home.
+
+Create a new project.
+
+For example:
+
+```text
+My MELCloud ACs
+```
+
+Select your language and country, then click **Create project**.
+
+---
+
+## 2. Enable Smart Home
+
+Inside your project, select:
+
+**Smart Home → Start Building**
+
+From the left-hand menu, open:
+
+**Actions**
+
+In the **Fulfillment URL** field, enter your Worker URL followed by:
+
+```text
+/google/fulfillment
+```
+
+For example:
+
+```text
+https://melhome-bridge.your-username.workers.dev/google/fulfillment
+```
+
+Click **Save**.
+
+---
+
+# 🔐 Step 6 — Configure Account Linking
+
+In Google Actions Console, go to:
+
+**Develop → Account linking**
+
+Use the following settings:
+
+| Setting           | Value                                  |
+| ----------------- | -------------------------------------- |
+| Client ID         | `google`                               |
+| Client Secret     | `secret`                               |
+| Authorization URL | `https://YOUR_WORKER_URL/google/auth`  |
+| Token URL         | `https://YOUR_WORKER_URL/google/token` |
+
+Replace `YOUR_WORKER_URL` with your actual Worker URL.
+
+For example:
+
+```text
+https://melhome-bridge.your-username.workers.dev/google/auth
+```
+
+and:
+
+```text
+https://melhome-bridge.your-username.workers.dev/google/token
+```
+
+Leave the remaining settings at their default values.
+
+Click **Save**.
+
+---
+
+# 🧪 Step 7 — Enable Test Mode
+
+At the top of the Google Actions Console, open the:
+
+**Test**
+
+tab.
+
+Enable your project for your Google account.
+
+Your Smart Home integration is now ready to be linked with Google Home.
+
+---
+
+# 📱 Step 8 — Link MELCloud Home with Google Home
+
+Open the **Google Home** app on your smartphone.
+
+### Follow these steps:
+
+1. Tap **+**
+2. Select **Set up device**
+3. Select **Works with Google**
+4. Search for your project
+
+If your project is named:
+
+```text
+My MELCloud ACs
+```
+
+search for:
+
+```text
+[test] My MELCloud ACs
+```
+
+Select your integration.
+
+A web page will open asking for the security PIN.
+
+Enter:
+
+```text
+1234
+```
+
+Submit the PIN.
+
+Google Home should now synchronize your MELCloud Home air conditioners.
+
+You can then assign each device to the appropriate room.
+
+---
+
+# 🗣️ Control Your Air Conditioners
+
+Once the integration is configured, you can control your air conditioners using Google Assistant.
+
+For example:
+
+> **"Hey Google, turn on the living room."**
+
+or:
+
+> **"Hey Google, set the bedroom temperature to 24 degrees."**
+
+---
+
+# 🔒 Security & Data Protection
+
+The administration interface is protected using **HTTP Basic Authentication**.
+
+This prevents someone who discovers your Worker URL from freely accessing the administration pages or controlling your air conditioners.
+
+Administration credentials are stored in **Cloudflare D1** rather than being hardcoded into the source code.
+
+### ⚠️ Important
+
+Never publish:
+
+* Your MELCloud Home password
+* Your administrator password
+* OAuth/session tokens
+* Other private credentials or secrets
+
+The source code can be safely shared publicly as long as no personal credentials or tokens are included in it.
+
+---
+
+# 🔐 Configure Administrator Credentials
+
+Open your Cloudflare D1 database:
+
+**Workers & Pages → D1 SQL Database → melhome-db → Console**
+
+First create the configuration table:
+
+```sql
+CREATE TABLE IF NOT EXISTS app_config (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+```
+
+Then configure your administrator credentials:
+
+```sql
+INSERT OR REPLACE INTO app_config (key, value)
+VALUES ('admin_user', 'admin');
+
+INSERT OR REPLACE INTO app_config (key, value)
+VALUES ('admin_pass', 'your_secure_password_here');
+```
+
+Replace:
+
+```text
+your_secure_password_here
+```
+
+with a strong password of your choice.
+
+## Protected pages
+
+The following administration pages are protected:
+
+```text
+/
+/setup
+/devices
+```
+
+Your browser will ask for:
+
+**Username**
+
+```text
+admin
+```
+
+**Password**
+
+```text
+your_secure_password
+```
+
+The Google integration routes:
+
+```text
+/google/...
+```
+
+remain accessible to Google's servers so that the Smart Home integration can function correctly.
+
+---
+
+# 🛠️ Troubleshooting
+
+## ❌ Google Home says the device is offline or unavailable
+
+The most likely cause is that your MELCloud authentication token has been revoked.
+
+This can happen, for example, if you change your MELCloud Home password in the official application.
+
+### Solution
+
+Open your Worker URL:
+
+```text
+https://melhome-bridge.your-username.workers.dev
+```
+
+Then select:
+
+**🔐 Configure MELCloud**
+
+Log in again using your MELCloud Home credentials.
+
+A new authentication token will be obtained and stored in Cloudflare D1.
+
+Google Home should then be able to communicate with your air conditioners again.
+
+---
+
+## ❓ How can I change the Google Home PIN?
+
+The default PIN is:
+
+```text
+1234
+```
+
+It is defined in the Worker code using:
+
+```javascript
+GOOGLE_HOME_PIN = "1234";
+```
+
+To change it:
+
+1. Open your Worker in Cloudflare
+2. Open the source code
+3. Search for `GOOGLE_HOME_PIN`
+4. Replace `1234` with your new PIN
+5. Click **Deploy**
+
+⚠️ You will need to use the new PIN the next time you link the integration with Google Home.
+
+---
+
+# 🧩 How It Works
+
+The bridge works as follows:
+
+```text
+┌─────────────────────┐
+│     Google Home     │
+└──────────┬──────────┘
+           │
+           │ Smart Home API
+           ▼
+┌─────────────────────┐
+│   Cloudflare Worker │
+│   melhome-bridge    │
+└───────┬───────┬─────┘
+        │       │
+        │       │
+        ▼       ▼
+┌────────────┐ ┌──────────────┐
+│ Cloudflare │ │ MELCloud Home│
+│     D1     │ │     API      │
+└────────────┘ └──────┬───────┘
+                       │
+                       ▼
+               ┌───────────────┐
+               │ Air Condition.│
+               │   Mitsubishi  │
+               └───────────────┘
+```
+
+### Component Overview
+
+**Google Home**
+Sends commands and receives the state of your devices.
+
+**Cloudflare Worker**
+Acts as the bridge between Google Home and MELCloud Home.
+
+**Cloudflare D1**
+Stores the information required to maintain the authentication session.
+
+**MELCloud Home**
+Provides access to your Mitsubishi Electric air conditioners.
+
+---
+
+# ⚠️ Disclaimer
+
+This project uses communication interfaces from MELCloud Home that are not publicly documented.
+
+Future changes to the MELCloud Home application or Mitsubishi Electric's servers may therefore affect compatibility.
+
+This project is **not officially affiliated with or endorsed by Mitsubishi Electric, MELCloud or Google**.
+
+---
+
+# 📄 License
+
+Add your preferred license here.
+
+For example:
+
+```text
+MIT License
+```
+
+if you intend to distribute this project under the MIT License.
+
+---
+
+# ⭐ Credits
+
+Developed to integrate **Mitsubishi Electric / MELCloud Home** air conditioners with **Google Home** using **Cloudflare Workers** and **Cloudflare D1**.
