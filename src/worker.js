@@ -239,7 +239,7 @@ async function refreshToken(env, row) {
 }
 
 /* ============================================================
-   GOOGLE HOME MAPPERS
+   MAPPERS DES ÉTATS
    ============================================================ */
 
 function getSetting(clim, keys) {
@@ -374,24 +374,20 @@ export default {
           const btnId = power ? 'btn-on-'+id : 'btn-off-'+id;
           const btn = document.getElementById(btnId);
           const originalText = btn.innerText;
-          btn.innerText = "⏳ Recherche API...";
+          btn.innerText = "⏳ Envoi...";
           
           try {
             const res = await fetch('/api/test-command', {
               method: 'POST',
               headers: {'Content-Type':'application/json'},
-              body: JSON.stringify({ id, payload: { power, inStandbyMode: false } })
+              body: JSON.stringify({ id, payload: { power, operationMode: 'Cool', setTemperature: 25, setFanSpeed: 'Auto', vaneVerticalDirection: 'Auto', vaneHorizontalDirection: 'Centre', temperatureIncrementOverride: null, inStandbyMode: null } })
             });
             const data = await res.json();
             
             if(data.ok) {
-               alert("✅ Succès ! L'URL qui fonctionne est :\\n\\n" + data.url);
+               alert("✅ Succès ! La commande a été validée.");
             } else {
-               let msg = "❌ Échec. Toutes les URLs ont retourné une erreur :\\n\\n";
-               for(let r of data.all_results) {
-                   msg += "- " + r.status + " : " + r.url + "\\n";
-               }
-               alert(msg);
+               alert("❌ Erreur " + data.status + "\\n\\nRéponse : " + data.response);
             }
           } catch(e) {
             alert("Erreur locale : " + e.message);
@@ -403,56 +399,25 @@ export default {
         return html(htmlList);
       }
 
-      /* --- SCANNER D'API DE PILOTAGE (BACKEND) --- */
+      /* --- ROUTE DE TEST DES COMMANDES (BACKEND) --- */
       if (request.method === "POST" && url.pathname === "/api/test-command") {
         const token = await getValidAccessToken(env);
-        if (!token) return Response.json({ ok: false, all_results: [{ status: 401, url: "local", response: "Non connecté" }] });
+        if (!token) return Response.json({ ok: false, status: 401, response: "Non connecté" });
         
         const body = await request.json();
         const climId = encodeURIComponent(body.id);
         
-        // On teste ces différentes variantes pour trouver le bon endpoint d'écriture
-        const endpointsToTest = [
-          `${API_BASE}/airToAirUnit/${climId}`,
-          `${API_BASE}/airtoairunits/${climId}`,
-          `${API_BASE}/devices/${climId}`,
-          `${API_BASE}/device/${climId}`,
-          `${API_BASE}/units/${climId}`,
-          `${API_BASE}/unit/${climId}`,
-          `https://melcloudhome.com/api/ataunit/${climId}`
-        ];
-
-        // Nettoyage du payload
-        const cleanPayload = Object.fromEntries(Object.entries(body.payload).filter(([_, v]) => v !== null));
-
-        let results = [];
-        let successUrl = null;
-
-        for (const urlToCall of endpointsToTest) {
-          try {
-            const res = await fetch(urlToCall, {
-              method: "PUT",
-              headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json", "User-Agent": USER_AGENT },
-              body: JSON.stringify(cleanPayload)
-            });
-            
-            const text = await res.text();
-            results.push({ url: urlToCall, status: res.status, response: text.substring(0, 100) });
-
-            if (res.ok) {
-              successUrl = urlToCall;
-              break;
-            }
-          } catch (err) {
-            results.push({ url: urlToCall, status: 500, response: err.message });
-          }
-        }
+        // 💡 UTILISATION DE LA BONNE URL POUR L'ÉCRITURE
+        const urlToCall = `${API_BASE}/monitor/ataunit/${climId}`;
         
-        if (successUrl) {
-          return Response.json({ ok: true, url: successUrl, all_results: results });
-        } else {
-          return Response.json({ ok: false, all_results: results });
-        }
+        const res = await fetch(urlToCall, {
+          method: "PUT",
+          headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json", "Accept": "application/json", "User-Agent": USER_AGENT },
+          body: JSON.stringify(body.payload)
+        });
+        
+        const text = await res.text();
+        return Response.json({ ok: res.ok, status: res.status, url: urlToCall, response: text });
       }
 
       /* --- GOOGLE HOME : ASSOCIATION OAUTH --- */
@@ -488,8 +453,135 @@ export default {
 
       /* --- GOOGLE HOME : FULFILLMENT --- */
       if (request.method === "POST" && url.pathname === "/google/fulfillment") {
-        // En attente de la bonne URL découverte via le testeur ci-dessus !
-        return Response.json({ requestId: "wait", payload: { errorCode: "urlNotDiscoveredYet" } });
+        const body = await request.json();
+        const requestId = body.requestId;
+        const intent = body.inputs?.[0]?.intent;
+        
+        const melToken = await getValidAccessToken(env);
+        if (!melToken) return Response.json({ requestId, payload: { errorCode: "authFailure" } });
+
+        // LECTURE
+        const apiResponse = await fetch(`${API_BASE}/context`, {
+          headers: { "Authorization": `Bearer ${melToken}`, "Accept": "application/json", "User-Agent": USER_AGENT }
+        });
+        const contextData = await apiResponse.json();
+        const clims = contextData.buildings?.[0]?.airToAirUnits || [];
+
+        /* -- SYNC -- */
+        if (intent === "action.devices.SYNC") {
+          const googleDevices = clims.map(clim => ({
+            id: String(clim.id ?? clim.ID),
+            type: "action.devices.types.THERMOSTAT",
+            traits: ["action.devices.traits.TemperatureSetting", "action.devices.traits.FanSpeed"],
+            name: { name: clim.givenDisplayName || clim.GivenDisplayName || "Climatiseur" },
+            willReportState: false,
+            attributes: {
+              availableThermostatModes: "off,on,heat,cool,dry,fan-only,auto",
+              thermostatTemperatureUnit: "C",
+              supportsFanSpeedPercent: false,
+              commandOnlyFanSpeed: false,
+              availableFanSpeeds: {
+                speeds: [
+                  { speed_name: "Auto", speed_values: [{ lang: "fr", speed_synonym: ["Auto", "Automatique"] }, { lang: "en", speed_synonym: ["Auto", "Automatic"] }] },
+                  { speed_name: "One", speed_values: [{ lang: "fr", speed_synonym: ["Vitesse 1", "1", "Un", "Faible"] }, { lang: "en", speed_synonym: ["Speed 1", "1", "Low"] }] },
+                  { speed_name: "Two", speed_values: [{ lang: "fr", speed_synonym: ["Vitesse 2", "2", "Deux"] }, { lang: "en", speed_synonym: ["Speed 2", "2"] }] },
+                  { speed_name: "Three", speed_values: [{ lang: "fr", speed_synonym: ["Vitesse 3", "3", "Trois", "Moyenne"] }, { lang: "en", speed_synonym: ["Speed 3", "3", "Medium"] }] },
+                  { speed_name: "Four", speed_values: [{ lang: "fr", speed_synonym: ["Vitesse 4", "4", "Quatre"] }, { lang: "en", speed_synonym: ["Speed 4", "4"] }] },
+                  { speed_name: "Five", speed_values: [{ lang: "fr", speed_synonym: ["Vitesse 5", "5", "Cinq", "Forte", "Max"] }, { lang: "en", speed_synonym: ["Speed 5", "5", "High", "Max"] }] }
+                ],
+                ordered: true
+              }
+            }
+          }));
+          return Response.json({ requestId, payload: { agentUserId: "melhome_user", devices: googleDevices } });
+        }
+
+        /* -- QUERY -- */
+        if (intent === "action.devices.QUERY") {
+          const devicesState = {};
+          clims.forEach(clim => {
+            const id = String(clim.id ?? clim.ID);
+            devicesState[id] = {
+              online: true, status: "SUCCESS", thermostatMode: getGoogleMode(clim),
+              thermostatTemperatureSetpoint: getTemp(clim), thermostatTemperatureAmbient: getRoomTemp(clim), currentFanSpeedSetting: getGoogleFanSpeed(clim)
+            };
+          });
+          return Response.json({ requestId, payload: { devices: devicesState } });
+        }
+
+        /* -- EXECUTE -- */
+        if (intent === "action.devices.EXECUTE") {
+          const commands = body.inputs?.[0]?.payload?.commands || [];
+          const responseCommands = [];
+
+          for (const command of commands) {
+            for (const device of command.devices || []) {
+              const climId = String(device.id);
+              const currentDeviceData = clims.find(c => String(c.id ?? c.ID) === climId);
+              if (!currentDeviceData) continue;
+
+              // On construit le payload complet avec les valeurs actuelles par défaut
+              let payloadJson = {
+                power: isPoweredOn(currentDeviceData),
+                operationMode: getSetting(currentDeviceData, ['operationMode', 'OperationMode']) || "Cool",
+                setTemperature: getTemp(currentDeviceData),
+                setFanSpeed: getSetting(currentDeviceData, ['setFanSpeed', 'SetFanSpeed', 'ActualFanSpeed']) || "Auto",
+                vaneVerticalDirection: getSetting(currentDeviceData, ['vaneVerticalDirection', 'VaneVerticalDirection']) || "Auto",
+                vaneHorizontalDirection: getSetting(currentDeviceData, ['vaneHorizontalDirection', 'VaneHorizontalDirection']) || "Auto",
+                temperatureIncrementOverride: null,
+                inStandbyMode: getSetting(currentDeviceData, ['inStandbyMode', 'InStandbyMode']) === true ? true : null
+              };
+
+              const updatedStates = {
+                online: true, thermostatMode: getGoogleMode(currentDeviceData),
+                thermostatTemperatureSetpoint: getTemp(currentDeviceData), currentFanSpeedSetting: getGoogleFanSpeed(currentDeviceData)
+              };
+
+              // Application des modifications demandées par Google Home
+              for (const exec of command.execution || []) {
+                if (exec.command === "action.devices.commands.OnOff") {
+                  payloadJson.power = Boolean(exec.params?.on);
+                  updatedStates.thermostatMode = payloadJson.power ? "auto" : "off";
+                }
+                if (exec.command === "action.devices.commands.ThermostatTemperatureSetpoint") {
+                  payloadJson.setTemperature = exec.params?.thermostatTemperatureSetpoint;
+                  updatedStates.thermostatTemperatureSetpoint = payloadJson.setTemperature;
+                }
+                if (exec.command === "action.devices.commands.ThermostatSetMode") {
+                  const mode = exec.params?.thermostatMode;
+                  updatedStates.thermostatMode = mode;
+                  if (mode === "off") payloadJson.power = false;
+                  else {
+                    payloadJson.power = true;
+                    if (mode === "cool") payloadJson.operationMode = "Cool";
+                    if (mode === "heat") payloadJson.operationMode = "Heat";
+                    if (mode === "dry") payloadJson.operationMode = "Dry";
+                    if (mode === "fan-only") payloadJson.operationMode = "Fan";
+                    if (mode === "auto") payloadJson.operationMode = "Automatic";
+                  }
+                }
+                if (exec.command === "action.devices.commands.SetFanSpeed") {
+                  payloadJson.setFanSpeed = exec.params?.fanSpeed;
+                  updatedStates.currentFanSpeedSetting = payloadJson.setFanSpeed;
+                }
+              }
+
+              // 💡 UTILISATION DE LA BONNE URL POUR L'ÉCRITURE
+              const execRes = await fetch(`${API_BASE}/monitor/ataunit/${encodeURIComponent(climId)}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json", "Accept": "application/json", "Authorization": `Bearer ${melToken}`, "User-Agent": USER_AGENT },
+                body: JSON.stringify(payloadJson)
+              });
+
+              if (execRes.ok) {
+                responseCommands.push({ ids: [climId], status: "SUCCESS", states: updatedStates });
+              } else {
+                responseCommands.push({ ids: [climId], status: "ERROR", errorCode: "hardError" });
+              }
+            }
+          }
+          return Response.json({ requestId, payload: { commands: responseCommands } });
+        }
       }
 
       return new Response("Not found", { status: 404 });
