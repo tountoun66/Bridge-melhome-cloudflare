@@ -1,21 +1,21 @@
 const AUTH_BASE = "https://auth.melcloudhome.com";
 const TOKEN_URL = `${AUTH_BASE}/connect/token`;
-const PAR_URL = `${AUTH_BASE}/connect/par`;
-const AUTHORIZE_URL = `${AUTH_BASE}/connect/authorize`;
 
 const API_BASE = "https://mobile.bff.melcloudhome.com";
 
 const CLIENT_ID = "homemobile";
-const REDIRECT_URI = "https://bridge-melhome-cloudflare.ohare-benjamin.workers.dev/oauth/callback";
+const REDIRECT_URI = "melcloudhome://";
+const SCOPES =
+  "openid profile email offline_access IdentityServerApi";
 
-const SCOPES = "openid profile email offline_access IdentityServerApi";
+const AUTH_BASIC = "Basic aG9tZW1vYmlsZTo=";
 
 const USER_AGENT =
   "MonitorAndControl.App.Mobile/52 CFNetwork/3860.400.51 Darwin/25.3.0";
 
 
 // ============================================================
-// D1 / OAUTH
+// D1
 // ============================================================
 
 async function getOAuth(env) {
@@ -27,32 +27,45 @@ async function getOAuth(env) {
 }
 
 
-async function saveOAuth(env, t) {
-  if (!t?.refresh_token) {
-    throw new Error("MELCloud n'a pas fourni de refresh_token");
+async function saveOAuth(env, tokens) {
+  if (!tokens?.refresh_token) {
+    throw new Error(
+      "MELCloud n'a pas fourni de refresh_token"
+    );
   }
 
   const now = Date.now();
 
-  const expires =
-    t.expires_at ||
-    now + Number(t.expires_in || 3600) * 1000;
+  const expiresAt =
+    tokens.expires_at ||
+    now +
+      Number(tokens.expires_in || 3600) *
+        1000;
 
   await env.DB
-    .prepare("DELETE FROM oauth_tokens")
+    .prepare(
+      "DELETE FROM oauth_tokens"
+    )
     .run();
 
   await env.DB
     .prepare(
       `INSERT INTO oauth_tokens
-      (id, access_token, refresh_token, expires_at, created_at, updated_at)
+      (
+        id,
+        access_token,
+        refresh_token,
+        expires_at,
+        created_at,
+        updated_at
+      )
       VALUES (?, ?, ?, ?, ?, ?)`
     )
     .bind(
       crypto.randomUUID(),
-      t.access_token || null,
-      t.refresh_token,
-      expires,
+      tokens.access_token || null,
+      tokens.refresh_token,
+      expiresAt,
       now,
       now
     )
@@ -61,516 +74,37 @@ async function saveOAuth(env, t) {
 
 
 // ============================================================
-// TOKEN REFRESH
+// TOKEN
 // ============================================================
 
-async function refresh(env, row) {
+async function refreshToken(env, row) {
   if (!row?.refresh_token) {
     throw new Error(
       "Aucun refresh_token MELCloud enregistré"
     );
   }
 
-  const body = new URLSearchParams({
-    grant_type: "refresh_token",
-    client_id: CLIENT_ID,
-    refresh_token: row.refresh_token,
-  });
-
-  const r = await fetch(TOKEN_URL, {
-    method: "POST",
-
-    headers: {
-      "Content-Type":
-        "application/x-www-form-urlencoded",
-      Accept: "application/json",
-      "User-Agent": USER_AGENT,
-    },
-
-    body: body.toString(),
-  });
-
-  if (!r.ok) {
-    const detail = await r.text();
-
-    throw new Error(
-      `MELCloud OAuth refresh HTTP ${r.status}: ${detail.slice(
-        0,
-        300
-      )}`
-    );
-  }
-
-  const t = await r.json();
-
-  // Certains serveurs OAuth ne renvoient pas
-  // le refresh_token lors d'un refresh.
-  if (!t.refresh_token) {
-    t.refresh_token = row.refresh_token;
-  }
-
-  await saveOAuth(env, t);
-
-  return t.access_token;
-}
-
-
-async function token(env) {
-  const row = await getOAuth(env);
-
-  if (!row) {
-    throw new Error(
-      "Aucun compte MELCloud OAuth enregistré"
-    );
-  }
-
-  if (
-    row.access_token &&
-    Number(row.expires_at) >
-      Date.now() + 300000
-  ) {
-    return row.access_token;
-  }
-
-  return refresh(env, row);
-}
-
-
-// ============================================================
-// MELCLOUD API
-// ============================================================
-
-async function mel(env, path, opt = {}) {
-  let t = await token(env);
-
-  let r = await fetch(
-    `${API_BASE}/${path.replace(/^\//, "")}`,
-    {
-      ...opt,
-
-      headers: {
-        Accept:
-          "application/json, text/plain, */*",
-
-        "User-Agent": USER_AGENT,
-
-        ...(opt.headers || {}),
-
-        Authorization: `Bearer ${t}`,
-      },
-    }
-  );
-
-  // Si le token est refusé, on le renouvelle une fois.
-  if (r.status === 401) {
-    const row = await getOAuth(env);
-
-    t = await refresh(env, row);
-
-    r = await fetch(
-      `${API_BASE}/${path.replace(/^\//, "")}`,
-      {
-        ...opt,
-
-        headers: {
-          Accept:
-            "application/json, text/plain, */*",
-
-          "User-Agent": USER_AGENT,
-
-          ...(opt.headers || {}),
-
-          Authorization: `Bearer ${t}`,
-        },
-      }
-    );
-  }
-
-  return r;
-}
-
-
-// ============================================================
-// PKCE
-// ============================================================
-
-function b64url(bytes) {
-  let binary = "";
-
-  for (const b of bytes) {
-    binary += String.fromCharCode(b);
-  }
-
-  return btoa(binary)
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
-}
-
-
-async function createPKCE() {
-  const verifierBytes =
-    crypto.getRandomValues(
-      new Uint8Array(32)
-    );
-
-  const verifier =
-    b64url(verifierBytes);
-
-  const digest =
-    await crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode(verifier)
-    );
-
-  const challenge =
-    b64url(new Uint8Array(digest));
-
-  return {
-    verifier,
-    challenge,
-  };
-}
-
-
-// ============================================================
-// COOKIE HELPERS
-// ============================================================
-
-function setCookie(name, value, maxAge = 600) {
-  return [
-    `${name}=${encodeURIComponent(value)}`,
-    "Path=/",
-    "HttpOnly",
-    "Secure",
-    "SameSite=Lax",
-    `Max-Age=${maxAge}`,
-  ].join("; ");
-}
-
-
-function getCookie(request, name) {
-  const cookieHeader =
-    request.headers.get("Cookie") || "";
-
-  const cookies =
-    cookieHeader.split(";");
-
-  for (const cookie of cookies) {
-    const index = cookie.indexOf("=");
-
-    if (index === -1) continue;
-
-    const key =
-      cookie.slice(0, index).trim();
-
-    if (key !== name) continue;
-
-    return decodeURIComponent(
-      cookie.slice(index + 1).trim()
-    );
-  }
-
-  return null;
-}
-
-
-// ============================================================
-// OAUTH LOGIN
-// ============================================================
-
-async function startOAuth(request) {
-  const { verifier, challenge } =
-    await createPKCE();
-
-  const state =
-    b64url(
-      crypto.getRandomValues(
-        new Uint8Array(32)
-      )
-    );
-
-  // ----------------------------------------------------------
-  // Pushed Authorization Request
-  // ----------------------------------------------------------
-
-  const parBody =
-    new URLSearchParams({
-      response_type: "code",
-
-      state,
-
-      code_challenge: challenge,
-
-      code_challenge_method: "S256",
-
-      client_id: CLIENT_ID,
-
-      scope: SCOPES,
-
-      redirect_uri: REDIRECT_URI,
-    });
-
-
-  const par =
-    await fetch(PAR_URL, {
-      method: "POST",
-
-      headers: {
-        "Content-Type":
-          "application/x-www-form-urlencoded",
-
-        Accept: "application/json",
-
-        "User-Agent": USER_AGENT,
-      },
-
-      body: parBody.toString(),
-    });
-
-
-  if (!par.ok) {
-    const detail =
-      await par.text();
-
-    throw new Error(
-      `MELCloud PAR HTTP ${par.status}: ${detail.slice(
-        0,
-        300
-      )}`
-    );
-  }
-
-
-  const parData =
-    await par.json();
-
-
-  if (!parData.request_uri) {
-    throw new Error(
-      "MELCloud n'a pas fourni de request_uri"
-    );
-  }
-
-
-  // ----------------------------------------------------------
-  // URL officielle MELCloud
-  // ----------------------------------------------------------
-
-  const authorize =
-    new URL(AUTHORIZE_URL);
-
-  authorize.searchParams.set(
-    "client_id",
-    CLIENT_ID
-  );
-
-  authorize.searchParams.set(
-    "request_uri",
-    parData.request_uri
-  );
-
-
-  // ----------------------------------------------------------
-  // On stocke temporairement le PKCE + state
-  // dans des cookies HttpOnly.
-  // ----------------------------------------------------------
-
-  const headers =
-    new Headers({
-      Location:
-        authorize.toString(),
-      "Cache-Control":
-        "no-store",
-    });
-
-
-  headers.append(
-    "Set-Cookie",
-    setCookie(
-      "mel_oauth_verifier",
-      verifier
-    )
-  );
-
-
-  headers.append(
-    "Set-Cookie",
-    setCookie(
-      "mel_oauth_state",
-      state
-    )
-  );
-
-
-  return new Response(null, {
-    status: 302,
-    headers,
-  });
-}
-
-
-// ============================================================
-// OAUTH CALLBACK
-// ============================================================
-
-async function oauthCallback(request, env) {
-  const url =
-    new URL(request.url);
-
-
-  const error =
-    url.searchParams.get("error");
-
-
-  const errorDescription =
-    url.searchParams.get(
-      "error_description"
-    );
-
-
-  if (error) {
-    return page(
-      `
-      <h1>❌ Connexion MELCloud refusée</h1>
-
-      <p>
-        ${escapeHtml(error)}
-      </p>
-
-      ${
-        errorDescription
-          ? `<p>${escapeHtml(
-              errorDescription
-            )}</p>`
-          : ""
-      }
-
-      <p>
-        <a href="/setup">
-          Réessayer
-        </a>
-      </p>
-      `,
-      400
-    );
-  }
-
-
-  const code =
-    url.searchParams.get("code");
-
-
-  if (!code) {
-    return page(
-      `
-      <h1>❌ Code OAuth manquant</h1>
-
-      <p>
-        MELCloud n'a pas renvoyé de code
-        d'autorisation.
-      </p>
-
-      <p>
-        <a href="/setup">
-          Réessayer
-        </a>
-      </p>
-      `,
-      400
-    );
-  }
-
-
-  const verifier =
-    getCookie(
-      request,
-      "mel_oauth_verifier"
-    );
-
-
-  const expectedState =
-    getCookie(
-      request,
-      "mel_oauth_state"
-    );
-
-
-  const returnedState =
-    url.searchParams.get("state");
-
-
-  if (!verifier) {
-    return page(
-      `
-      <h1>❌ Session OAuth expirée</h1>
-
-      <p>
-        La session de connexion a expiré.
-      </p>
-
-      <p>
-        <a href="/setup">
-          Recommencer la connexion
-        </a>
-      </p>
-      `,
-      400
-    );
-  }
-
-
-  if (
-    expectedState &&
-    returnedState &&
-    expectedState !== returnedState
-  ) {
-    return page(
-      `
-      <h1>❌ Erreur de sécurité OAuth</h1>
-
-      <p>
-        Le paramètre state ne correspond pas.
-      </p>
-
-      <p>
-        <a href="/setup">
-          Réessayer
-        </a>
-      </p>
-      `,
-      400
-    );
-  }
-
-
-  // ----------------------------------------------------------
-  // Exchange code -> tokens
-  // ----------------------------------------------------------
-
-  const tokenBody =
+  const body =
     new URLSearchParams({
       grant_type:
-        "authorization_code",
-
-      code,
-
-      redirect_uri:
-        REDIRECT_URI,
-
-      code_verifier:
-        verifier,
+        "refresh_token",
 
       client_id:
         CLIENT_ID,
+
+      refresh_token:
+        row.refresh_token,
     });
 
 
-  const tokenResponse =
+  const response =
     await fetch(TOKEN_URL, {
       method: "POST",
 
       headers: {
+        Authorization:
+          AUTH_BASIC,
+
         "Content-Type":
           "application/x-www-form-urlencoded",
 
@@ -582,66 +116,34 @@ async function oauthCallback(request, env) {
       },
 
       body:
-        tokenBody.toString(),
+        body.toString(),
     });
 
 
-  if (!tokenResponse.ok) {
+  if (!response.ok) {
     const detail =
-      await tokenResponse.text();
+      await response.text();
 
-    return page(
-      `
-      <h1>❌ Échange OAuth impossible</h1>
-
-      <p>
-        MELCloud a répondu HTTP
-        ${tokenResponse.status}.
-      </p>
-
-      <pre style="white-space:pre-wrap">${escapeHtml(
-        detail.slice(0, 1000)
-      )}</pre>
-
-      <p>
-        <a href="/setup">
-          Réessayer
-        </a>
-      </p>
-      `,
-      400
+    throw new Error(
+      `MELCloud OAuth refresh HTTP ${response.status}: ${detail.slice(
+        0,
+        500
+      )}`
     );
   }
 
 
   const tokens =
-    await tokenResponse.json();
+    await response.json();
 
 
+  // Certains serveurs ne renvoient
+  // pas le refresh_token à chaque refresh.
   if (!tokens.refresh_token) {
-    return page(
-      `
-      <h1>❌ Refresh token manquant</h1>
-
-      <p>
-        MELCloud a accepté la connexion
-        mais n'a pas fourni de refresh_token.
-      </p>
-
-      <p>
-        <a href="/setup">
-          Réessayer
-        </a>
-      </p>
-      `,
-      400
-    );
+    tokens.refresh_token =
+      row.refresh_token;
   }
 
-
-  // ----------------------------------------------------------
-  // Sauvegarde D1
-  // ----------------------------------------------------------
 
   await saveOAuth(
     env,
@@ -649,99 +151,311 @@ async function oauthCallback(request, env) {
   );
 
 
-  // ----------------------------------------------------------
-  // Nettoyage des cookies OAuth
-  // ----------------------------------------------------------
-
-  const headers =
-    new Headers({
-      "Cache-Control":
-        "no-store",
-    });
+  return tokens.access_token;
+}
 
 
-  headers.append(
-    "Set-Cookie",
-    setCookie(
-      "mel_oauth_verifier",
-      "",
-      0
-    )
-  );
+async function getAccessToken(env) {
+  const row =
+    await getOAuth(env);
 
 
-  headers.append(
-    "Set-Cookie",
-    setCookie(
-      "mel_oauth_state",
-      "",
-      0
-    )
-  );
+  if (!row) {
+    throw new Error(
+      "Aucun compte MELCloud OAuth enregistré"
+    );
+  }
 
 
-  return new Response(
-    `<!doctype html>
-<html lang="fr">
-<head>
-<meta name="viewport"
-content="width=device-width,initial-scale=1">
-<title>MELHome Bridge</title>
-</head>
+  // 5 minutes de marge
+  if (
+    row.access_token &&
+    Number(row.expires_at) >
+      Date.now() + 300000
+  ) {
+    return row.access_token;
+  }
 
-<body style="
-font-family:system-ui;
-max-width:700px;
-margin:40px auto;
-padding:20px
-">
 
-<h1>✅ MELCloud connecté</h1>
-
-<p>
-La connexion MELCloud a été enregistrée
-dans Cloudflare D1.
-</p>
-
-<p>
-Le Worker pourra maintenant renouveler
-automatiquement le token lorsque celui-ci
-expire.
-</p>
-
-<p>
-<a href="/api/status">
-Vérifier le statut
-</a>
-</p>
-
-</body>
-</html>`,
-    {
-      status: 200,
-      headers,
-    }
+  return refreshToken(
+    env,
+    row
   );
 }
 
 
 // ============================================================
-// HTML HELPERS
+// MELCLOUD API
+// ============================================================
+
+async function mel(
+  env,
+  path,
+  options = {}
+) {
+  let accessToken =
+    await getAccessToken(env);
+
+
+  const makeRequest =
+    async token => {
+      return fetch(
+        `${API_BASE}/${path.replace(
+          /^\//,
+          ""
+        )}`,
+        {
+          ...options,
+
+          headers: {
+            Accept:
+              "application/json, text/plain, */*",
+
+            "User-Agent":
+              USER_AGENT,
+
+            ...(options.headers || {}),
+
+            Authorization:
+              `Bearer ${token}`,
+          },
+        }
+      );
+    };
+
+
+  let response =
+    await makeRequest(
+      accessToken
+    );
+
+
+  // Token expiré/refusé
+  if (
+    response.status === 401
+  ) {
+    const row =
+      await getOAuth(env);
+
+
+    accessToken =
+      await refreshToken(
+        env,
+        row
+      );
+
+
+    response =
+      await makeRequest(
+        accessToken
+      );
+  }
+
+
+  return response;
+}
+
+
+// ============================================================
+// OAUTH — UTILITAIRE POUR ANDROID
+// ============================================================
+//
+// Android doit utiliser ces informations pour lancer
+// l'authentification MELCloud.
+//
+// Le redirect URI DOIT rester :
+//     melcloudhome://
+//
+// Le Worker ne reçoit donc pas le callback OAuth.
+//
+// ============================================================
+
+async function createPAR() {
+  const random =
+    crypto.getRandomValues(
+      new Uint8Array(32)
+    );
+
+
+  let binary = "";
+
+  for (const byte of random) {
+    binary += String.fromCharCode(
+      byte
+    );
+  }
+
+
+  const verifier =
+    btoa(binary)
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+
+
+  const digest =
+    await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(
+        verifier
+      )
+    );
+
+
+  let digestBinary = "";
+
+  for (
+    const byte of
+      new Uint8Array(digest)
+  ) {
+    digestBinary += String.fromCharCode(
+      byte
+    );
+  }
+
+
+  const challenge =
+    btoa(digestBinary)
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+
+
+  const stateBytes =
+    crypto.getRandomValues(
+      new Uint8Array(16)
+    );
+
+
+  let stateBinary = "";
+
+  for (const byte of stateBytes) {
+    stateBinary += String.fromCharCode(
+      byte
+    );
+  }
+
+
+  const state =
+    btoa(stateBinary)
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+
+
+  const body =
+    new URLSearchParams({
+      response_type:
+        "code",
+
+      state,
+
+      code_challenge:
+        challenge,
+
+      code_challenge_method:
+        "S256",
+
+      client_id:
+        CLIENT_ID,
+
+      scope:
+        SCOPES,
+
+      redirect_uri:
+        REDIRECT_URI,
+    });
+
+
+  const response =
+    await fetch(
+      `${AUTH_BASE}/connect/par`,
+      {
+        method: "POST",
+
+        headers: {
+          Authorization:
+            AUTH_BASIC,
+
+          "Content-Type":
+            "application/x-www-form-urlencoded",
+
+          Accept:
+            "application/json",
+
+          "User-Agent":
+            USER_AGENT,
+        },
+
+        body:
+          body.toString(),
+      }
+    );
+
+
+  if (!response.ok) {
+    const detail =
+      await response.text();
+
+    throw new Error(
+      `MELCloud PAR HTTP ${response.status}: ${detail.slice(
+        0,
+        500
+      )}`
+    );
+  }
+
+
+  const result =
+    await response.json();
+
+
+  if (!result.request_uri) {
+    throw new Error(
+      "MELCloud n'a pas fourni de request_uri"
+    );
+  }
+
+
+  return {
+    request_uri:
+      result.request_uri,
+
+    verifier,
+
+    state,
+  };
+}
+
+
+// ============================================================
+// PAGE
 // ============================================================
 
 function escapeHtml(value) {
   return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(
+      /&/g,
+      "&amp;"
+    )
+    .replace(
+      /</g,
+      "&lt;"
+    )
+    .replace(
+      />/g,
+      "&gt;"
+    )
+    .replace(
+      /"/g,
+      "&quot;"
+    );
 }
 
 
 function page(
   body,
-  status = 200,
-  extraHeaders = {}
+  status = 200
 ) {
   return new Response(
     `<!doctype html>
@@ -749,9 +463,10 @@ function page(
 
 <head>
 <meta charset="utf-8">
-<meta name="viewport"
-content="width=device-width,initial-scale=1">
-
+<meta
+  name="viewport"
+  content="width=device-width,initial-scale=1"
+>
 <title>MELHome Bridge</title>
 </head>
 
@@ -759,7 +474,7 @@ content="width=device-width,initial-scale=1">
 font-family:system-ui;
 max-width:700px;
 margin:40px auto;
-padding:20px
+padding:20px;
 ">
 
 ${body}
@@ -776,8 +491,6 @@ ${body}
 
         "cache-control":
           "no-store",
-
-        ...extraHeaders,
       },
     }
   );
@@ -785,69 +498,77 @@ ${body}
 
 
 // ============================================================
-// MELCLOUD DEVICE HELPERS
+// GOOGLE HOME DEVICES
 // ============================================================
 
-function setting(c, ks) {
-  for (const k of ks) {
-    if (c?.[k] != null) {
-      return c[k];
+function setting(c, keys) {
+  for (const key of keys) {
+    if (c?.[key] != null) {
+      return c[key];
     }
   }
 
+
   for (
-    const n of [
+    const name of [
       "settings",
       "unitSettings",
     ]
   ) {
-    for (
-      const x of
-        Array.isArray(c?.[n])
-          ? c[n]
-          : []
-    ) {
+    const list =
+      Array.isArray(c?.[name])
+        ? c[name]
+        : [];
+
+
+    for (const item of list) {
+      const itemName =
+        String(
+          item?.name ??
+          item?.Name ??
+          ""
+        ).toLowerCase();
+
+
       if (
-        ks.some(
-          k =>
-            k.toLowerCase() ===
-            String(
-              x?.name ??
-              x?.Name ??
-              ""
-            ).toLowerCase()
+        keys.some(
+          key =>
+            key.toLowerCase() ===
+            itemName
         )
       ) {
         return (
-          x?.value ??
-          x?.Value ??
+          item?.value ??
+          item?.Value ??
           null
         );
       }
     }
   }
 
+
   return null;
 }
 
 
-function on(c) {
-  const v =
+function isOn(c) {
+  const value =
     setting(c, [
       "power",
       "Power",
     ]);
 
+
   return (
-    v === true ||
-    String(v).toLowerCase() ===
+    value === true ||
+    String(value).toLowerCase() ===
       "true"
   );
 }
 
 
-function room(c) {
-  const n =
+function roomTemperature(c) {
+  const value =
     Number.parseFloat(
       setting(c, [
         "roomTemperature",
@@ -857,16 +578,17 @@ function room(c) {
       ])
     );
 
-  return Number.isFinite(n) &&
-    n > 0 &&
-    n < 60
-    ? n
+
+  return Number.isFinite(value) &&
+    value > 0 &&
+    value < 60
+    ? value
     : 20;
 }
 
 
-function temp(c) {
-  const n =
+function setTemperature(c) {
+  const value =
     Number.parseFloat(
       setting(c, [
         "setTemperature",
@@ -877,20 +599,22 @@ function temp(c) {
       ])
     );
 
-  return Number.isFinite(n) &&
-    n > 0 &&
-    n < 60
-    ? n
+
+  return Number.isFinite(value) &&
+    value > 0 &&
+    value < 60
+    ? value
     : 20;
 }
 
 
-function mode(c) {
-  if (!on(c)) {
+function operationMode(c) {
+  if (!isOn(c)) {
     return "off";
   }
 
-  const m =
+
+  const value =
     String(
       setting(c, [
         "operationMode",
@@ -899,24 +623,41 @@ function mode(c) {
         "Automatic"
     ).toLowerCase();
 
-  if (m.includes("cool"))
+
+  if (
+    value.includes("cool")
+  ) {
     return "cool";
+  }
 
-  if (m.includes("heat"))
+
+  if (
+    value.includes("heat")
+  ) {
     return "heat";
+  }
 
-  if (m.includes("dry"))
+
+  if (
+    value.includes("dry")
+  ) {
     return "dry";
+  }
 
-  if (m.includes("fan"))
+
+  if (
+    value.includes("fan")
+  ) {
     return "fan-only";
+  }
+
 
   return "auto";
 }
 
 
-function fan(c) {
-  const s =
+function fanSpeed(c) {
+  const value =
     String(
       setting(c, [
         "setFanSpeed",
@@ -926,104 +667,137 @@ function fan(c) {
       ]) ?? ""
     ).toLowerCase();
 
-  return s.includes("one") ||
-    s === "1"
-    ? "One"
-    : s.includes("two") ||
-      s === "2"
-    ? "Two"
-    : s.includes("three") ||
-      s === "3"
-    ? "Three"
-    : s.includes("four") ||
-      s === "4"
-    ? "Four"
-    : s.includes("five") ||
-      s === "5"
-    ? "Five"
-    : "Auto";
+
+  if (
+    value.includes("one") ||
+    value === "1"
+  ) {
+    return "One";
+  }
+
+
+  if (
+    value.includes("two") ||
+    value === "2"
+  ) {
+    return "Two";
+  }
+
+
+  if (
+    value.includes("three") ||
+    value === "3"
+  ) {
+    return "Three";
+  }
+
+
+  if (
+    value.includes("four") ||
+    value === "4"
+  ) {
+    return "Four";
+  }
+
+
+  if (
+    value.includes("five") ||
+    value === "5"
+  ) {
+    return "Five";
+  }
+
+
+  return "Auto";
 }
 
 
 function devices(cs) {
-  return cs.map(c => ({
-    id: String(
-      c.id ?? c.ID
-    ),
+  return cs.map(
+    c => ({
+      id: String(
+        c.id ?? c.ID
+      ),
 
-    type:
-      "action.devices.types.THERMOSTAT",
+      type:
+        "action.devices.types.THERMOSTAT",
 
-    traits: [
-      "action.devices.traits.TemperatureSetting",
-      "action.devices.traits.FanSpeed",
-    ],
+      traits: [
+        "action.devices.traits.TemperatureSetting",
+        "action.devices.traits.FanSpeed",
+      ],
 
-    name: {
-      name:
-        c.givenDisplayName ??
-        c.GivenDisplayName ??
-        "Climatiseur",
-    },
-
-    willReportState:
-      false,
-
-    attributes: {
-      availableThermostatModes:
-        "off,on,heat,cool,dry,fan-only,auto",
-
-      thermostatTemperatureUnit:
-        "C",
-
-      supportsFanSpeedPercent:
-        false,
-
-      commandOnlyFanSpeed:
-        false,
-
-      availableFanSpeeds: {
-        speeds: [
-          "Auto",
-          "One",
-          "Two",
-          "Three",
-          "Four",
-          "Five",
-        ].map(
-          (n, i) => ({
-            speed_name: n,
-
-            speed_values: [
-              {
-                lang: "fr",
-
-                speed_synonym: [
-                  n,
-                  i
-                    ? `Vitesse ${i}`
-                    : "Automatique",
-                ],
-              },
-
-              {
-                lang: "en",
-
-                speed_synonym: [
-                  n,
-                  i
-                    ? `Speed ${i}`
-                    : "Automatic",
-                ],
-              },
-            ],
-          })
-        ),
-
-        ordered: true,
+      name: {
+        name:
+          c.givenDisplayName ??
+          c.GivenDisplayName ??
+          "Climatiseur",
       },
-    },
-  }));
+
+      willReportState:
+        false,
+
+      attributes: {
+        availableThermostatModes:
+          "off,on,heat,cool,dry,fan-only,auto",
+
+        thermostatTemperatureUnit:
+          "C",
+
+        supportsFanSpeedPercent:
+          false,
+
+        commandOnlyFanSpeed:
+          false,
+
+        availableFanSpeeds: {
+          speeds: [
+            "Auto",
+            "One",
+            "Two",
+            "Three",
+            "Four",
+            "Five",
+          ].map(
+            (name, index) => ({
+              speed_name:
+                name,
+
+              speed_values: [
+                {
+                  lang:
+                    "fr",
+
+                  speed_synonym: [
+                    name,
+
+                    index
+                      ? `Vitesse ${index}`
+                      : "Automatique",
+                  ],
+                },
+
+                {
+                  lang:
+                    "en",
+
+                  speed_synonym: [
+                    name,
+
+                    index
+                      ? `Speed ${index}`
+                      : "Automatic",
+                  ],
+                },
+              ],
+            })
+          ),
+
+          ordered: true,
+        },
+      },
+    })
+  );
 }
 
 
@@ -1032,21 +806,22 @@ function devices(cs) {
 // ============================================================
 
 async function fulfillment(
-  req,
+  request,
   env
 ) {
-  const b =
-    await req.json();
+  const body =
+    await request.json();
 
-  const id =
-    b?.requestId;
+
+  const requestId =
+    body?.requestId;
 
   const intent =
-    b?.inputs?.[0]?.intent;
+    body?.inputs?.[0]?.intent;
 
 
   if (
-    !req.headers.get(
+    !request.headers.get(
       "authorization"
     )
   ) {
@@ -1059,18 +834,18 @@ async function fulfillment(
   }
 
 
-  const r =
+  const response =
     await mel(
       env,
       "context"
     );
 
 
-  if (!r.ok) {
+  if (!response.ok) {
     return Response.json(
       {
         error:
-          `MELCloud context HTTP ${r.status}`,
+          `MELCloud context HTTP ${response.status}`,
       },
       {
         status: 502,
@@ -1079,10 +854,13 @@ async function fulfillment(
   }
 
 
-  const cs =
-    (
-      await r.json()
-    )?.buildings?.[0]
+  const context =
+    await response.json();
+
+
+  const units =
+    context
+      ?.buildings?.[0]
       ?.airToAirUnits || [];
 
 
@@ -1095,14 +873,14 @@ async function fulfillment(
     "action.devices.SYNC"
   ) {
     return Response.json({
-      requestId: id,
+      requestId,
 
       payload: {
         agentUserId:
           "melhome_user",
 
         devices:
-          devices(cs),
+          devices(units),
       },
     });
   }
@@ -1116,40 +894,44 @@ async function fulfillment(
     intent ===
     "action.devices.QUERY"
   ) {
-    const d = {};
+    const result = {};
 
-    for (const c of cs) {
-      const x =
+
+    for (const unit of units) {
+      const id =
         String(
-          c.id ?? c.ID
+          unit.id ??
+          unit.ID
         );
 
-      d[x] = {
+
+      result[id] = {
         online: true,
 
         status:
           "SUCCESS",
 
         thermostatMode:
-          mode(c),
+          operationMode(unit),
 
         thermostatTemperatureSetpoint:
-          temp(c),
+          setTemperature(unit),
 
         thermostatTemperatureAmbient:
-          room(c),
+          roomTemperature(unit),
 
         currentFanSpeedSetting:
-          fan(c),
+          fanSpeed(unit),
       };
     }
 
 
     return Response.json({
-      requestId: id,
+      requestId,
 
       payload: {
-        devices: d,
+        devices:
+          result,
       },
     });
   }
@@ -1163,37 +945,38 @@ async function fulfillment(
     intent ===
     "action.devices.EXECUTE"
   ) {
-    const out = [];
+    const commands = [];
 
 
     for (
-      const cmd of
-        b?.inputs?.[0]
+      const command of
+        body?.inputs?.[0]
           ?.payload
           ?.commands || []
     ) {
       for (
-        const dev of
-          cmd.devices || []
+        const device of
+          command.devices || []
       ) {
-        const c =
-          cs.find(
+        const unit =
+          units.find(
             x =>
               String(
-                x.id ?? x.ID
+                x.id ??
+                x.ID
               ) ===
               String(
-                dev.id
+                device.id
               )
           );
 
 
-        if (!c) {
+        if (!unit) {
           continue;
         }
 
 
-        const p = {
+        const params = {
           power: null,
 
           operationMode:
@@ -1219,122 +1002,137 @@ async function fulfillment(
         };
 
 
-        const s = {
+        const states = {
           online: true,
 
           thermostatMode:
-            mode(c),
+            operationMode(unit),
 
           thermostatTemperatureSetpoint:
-            temp(c),
+            setTemperature(unit),
 
           currentFanSpeedSetting:
-            fan(c),
+            fanSpeed(unit),
         };
 
 
         for (
-          const e of
-            cmd.execution ||
+          const execution of
+            command.execution ||
             []
         ) {
+
+          // ON / OFF
           if (
-            e.command ===
+            execution.command ===
             "action.devices.commands.OnOff"
           ) {
-            p.power =
-              !!e.params.on;
+            params.power =
+              !!execution.params.on;
 
-            s.thermostatMode =
-              e.params.on
+
+            states.thermostatMode =
+              execution.params.on
                 ? "auto"
                 : "off";
           }
 
 
+          // TEMPÉRATURE
           if (
-            e.command ===
+            execution.command ===
             "action.devices.commands.ThermostatTemperatureSetpoint"
           ) {
-            p.setTemperature =
-              e.params
+            params.setTemperature =
+              execution.params
                 .thermostatTemperatureSetpoint;
 
-            s.thermostatTemperatureSetpoint =
-              e.params
+
+            states.thermostatTemperatureSetpoint =
+              execution.params
                 .thermostatTemperatureSetpoint;
           }
 
 
+          // MODE
           if (
-            e.command ===
+            execution.command ===
             "action.devices.commands.ThermostatSetMode"
           ) {
-            const m =
-              e.params
+            const mode =
+              execution.params
                 .thermostatMode;
 
-            s.thermostatMode =
-              m;
+
+            states.thermostatMode =
+              mode;
 
 
             if (
-              m === "off"
+              mode === "off"
             ) {
-              p.power =
+              params.power =
                 false;
             } else {
+
               if (
-                !on(c) &&
-                p.power === null
+                !isOn(unit) &&
+                params.power ===
+                  null
               ) {
-                p.power =
+                params.power =
                   true;
               }
 
 
-              p.operationMode =
-                ({
-                  cool: "Cool",
+              params.operationMode =
+                {
+                  cool:
+                    "Cool",
 
-                  heat: "Heat",
+                  heat:
+                    "Heat",
 
-                  dry: "Dry",
+                  dry:
+                    "Dry",
 
                   "fan-only":
                     "Fan",
 
                   auto:
                     "Automatic",
-                })[m] ??
+                }[mode] ??
                 null;
             }
           }
 
 
+          // VENTILATION
           if (
-            e.command ===
+            execution.command ===
             "action.devices.commands.SetFanSpeed"
           ) {
-            p.setFanSpeed =
-              e.params
+            params.setFanSpeed =
+              execution.params
                 .fanSpeed;
 
-            s.currentFanSpeedSetting =
-              e.params
+
+            states.currentFanSpeedSetting =
+              execution.params
                 .fanSpeed;
           }
         }
 
 
-        const u =
+        const result =
           await mel(
             env,
             `monitor/ataunit/${encodeURIComponent(
-              dev.id
+              device.id
             )}`,
             {
-              method: "PUT",
+              method:
+                "PUT",
 
               headers: {
                 "Content-Type":
@@ -1342,55 +1140,57 @@ async function fulfillment(
               },
 
               body:
-                JSON.stringify(p),
+                JSON.stringify(
+                  params
+                ),
             }
           );
 
 
-        out.push(
-          u.ok
-            ? {
-                ids: [
-                  String(
-                    dev.id
-                  ),
-                ],
+        if (result.ok) {
+          commands.push({
+            ids: [
+              String(
+                device.id
+              ),
+            ],
 
-                status:
-                  "SUCCESS",
+            status:
+              "SUCCESS",
 
-                states: s,
-              }
-            : {
-                ids: [
-                  String(
-                    dev.id
-                  ),
-                ],
+            states,
+          });
+        } else {
+          commands.push({
+            ids: [
+              String(
+                device.id
+              ),
+            ],
 
-                status:
-                  "ERROR",
+            status:
+              "ERROR",
 
-                errorCode:
-                  "hardError",
-              }
-        );
+            errorCode:
+              "hardError",
+          });
+        }
       }
     }
 
 
     return Response.json({
-      requestId: id,
+      requestId,
 
       payload: {
-        commands: out,
+        commands,
       },
     });
   }
 
 
   return Response.json({
-    requestId: id,
+    requestId,
 
     payload: {},
   });
@@ -1403,11 +1203,11 @@ async function fulfillment(
 
 export default {
   async fetch(
-    req,
+    request,
     env
   ) {
-    const u =
-      new URL(req.url);
+    const url =
+      new URL(request.url);
 
 
     try {
@@ -1417,11 +1217,11 @@ export default {
       // ------------------------------------------------------
 
       if (
-        req.method === "GET" &&
-        u.pathname ===
+        request.method === "GET" &&
+        url.pathname ===
           "/api/status"
       ) {
-        const o =
+        const oauth =
           await getOAuth(env);
 
 
@@ -1429,10 +1229,10 @@ export default {
           ok: true,
 
           oauthSession:
-            !!o?.refresh_token,
+            !!oauth?.refresh_token,
 
           tokenExpiresAt:
-            o?.expires_at ??
+            oauth?.expires_at ??
             null,
         });
       }
@@ -1443,10 +1243,11 @@ export default {
       // ------------------------------------------------------
 
       if (
-        req.method === "GET" &&
-        u.pathname === "/setup"
+        request.method === "GET" &&
+        url.pathname ===
+          "/setup"
       ) {
-        const o =
+        const oauth =
           await getOAuth(env);
 
 
@@ -1456,95 +1257,111 @@ export default {
           </h1>
 
           <p>
-            Connexion officielle
-            à MELCloud Home.
+            Cloudflare fonctionne correctement.
           </p>
 
           <p>
-            État OAuth :
+            OAuth MELCloud :
             <b>
               ${
-                o?.refresh_token
+                oauth?.refresh_token
                   ? "CONFIGURE"
                   : "NON CONFIGURE"
               }
             </b>
           </p>
 
+          <hr>
+
+          <h2>
+            Connexion MELCloud
+          </h2>
+
           <p>
-            La connexion se fera
-            directement sur la page
-            officielle MELCloud.
+            La connexion MELCloud doit être
+            effectuée depuis l'application
+            Android avec la page officielle
+            MELCloud.
           </p>
 
           <p>
-            <a
-              href="/oauth/start"
-              style="
-                display:inline-block;
-                padding:12px 20px;
-                background:#111;
-                color:white;
-                text-decoration:none;
-                border-radius:8px;
-              "
-            >
-              Se connecter avec MELCloud
-            </a>
+            Le Worker n'enregistre jamais
+            ton mot de passe MELCloud.
+          </p>
+
+          <p>
+            Une fois le refresh token transmis
+            par l'application Android, il sera
+            enregistré automatiquement dans D1.
           </p>
         `);
       }
 
 
       // ------------------------------------------------------
-      // START OAUTH
+      // OAUTH INFO POUR ANDROID
       // ------------------------------------------------------
 
       if (
-        req.method === "GET" &&
-        u.pathname ===
-          "/oauth/start"
+        request.method === "GET" &&
+        url.pathname ===
+          "/api/oauth/start"
       ) {
-        return await startOAuth(
-          req
-        );
+        const data =
+          await createPAR();
+
+
+        return Response.json({
+          ok: true,
+
+          client_id:
+            CLIENT_ID,
+
+          redirect_uri:
+            REDIRECT_URI,
+
+          scope:
+            SCOPES,
+
+          request_uri:
+            data.request_uri,
+
+          code_verifier:
+            data.verifier,
+
+          state:
+            data.state,
+
+          authorize_url:
+            `${AUTH_BASE}/connect/authorize?client_id=${encodeURIComponent(
+              CLIENT_ID
+            )}&request_uri=${encodeURIComponent(
+              data.request_uri
+            )}`,
+        });
       }
 
 
       // ------------------------------------------------------
-      // CALLBACK
+      // SAUVEGARDE DU REFRESH TOKEN ANDROID
       // ------------------------------------------------------
 
       if (
-        req.method === "GET" &&
-        u.pathname ===
-          "/oauth/callback"
-      ) {
-        return await oauthCallback(
-          req,
-          env
-        );
-      }
-
-
-      // ------------------------------------------------------
-      // MANUAL SAVE OAUTH
-      // ------------------------------------------------------
-
-      if (
-        req.method === "POST" &&
-        u.pathname ===
+        request.method === "POST" &&
+        url.pathname ===
           "/api/save-oauth"
       ) {
-        const b =
-          await req.json();
+        const data =
+          await request.json();
 
 
         if (
-          !b?.refresh_token
+          !data?.refresh_token
         ) {
           return Response.json(
             {
+              ok: false,
+
               error:
                 "refresh_token manquant",
             },
@@ -1557,12 +1374,14 @@ export default {
 
         await saveOAuth(
           env,
-          b
+          data
         );
 
 
         return Response.json({
-          success: true,
+          ok: true,
+
+          saved: true,
         });
       }
 
@@ -1572,12 +1391,12 @@ export default {
       // ------------------------------------------------------
 
       if (
-        req.method === "POST" &&
-        u.pathname ===
+        request.method === "POST" &&
+        url.pathname ===
           "/fulfillment"
       ) {
         return fulfillment(
-          req,
+          request,
           env
         );
       }
@@ -1588,12 +1407,13 @@ export default {
       // ------------------------------------------------------
 
       if (
-        req.method === "GET" &&
-        u.pathname ===
+        request.method === "GET" &&
+        url.pathname ===
           "/health"
       ) {
         return Response.json({
-          status: "ok",
+          status:
+            "ok",
 
           service:
             "melhome-bridge-cloudflare",
@@ -1606,10 +1426,10 @@ export default {
       // ------------------------------------------------------
 
       if (
-        req.method === "GET" &&
-        u.pathname === "/"
+        request.method === "GET" &&
+        url.pathname === "/"
       ) {
-        const o =
+        const oauth =
           await getOAuth(env);
 
 
@@ -1626,7 +1446,7 @@ export default {
             OAuth MELCloud :
             <b>
               ${
-                o?.refresh_token
+                oauth?.refresh_token
                   ? "CONFIGURE"
                   : "NON CONFIGURE"
               }
@@ -1635,13 +1455,19 @@ export default {
 
           <p>
             <a href="/setup">
-              Configurer MELCloud
+              Configuration
             </a>
           </p>
 
           <p>
             <a href="/api/status">
-              API Status
+              Vérifier le statut
+            </a>
+          </p>
+
+          <p>
+            <a href="/api/oauth/start">
+              Tester le PAR OAuth
             </a>
           </p>
         `);
@@ -1649,7 +1475,7 @@ export default {
 
 
       // ------------------------------------------------------
-      // NOT FOUND
+      // 404
       // ------------------------------------------------------
 
       return new Response(
@@ -1659,18 +1485,20 @@ export default {
         }
       );
 
-    } catch (e) {
+    } catch (error) {
 
       console.error(
         "[MELHOME]",
-        e
+        error
       );
 
 
       return Response.json(
         {
+          ok: false,
+
           error:
-            e?.message ||
+            error?.message ||
             "Internal error",
         },
         {
