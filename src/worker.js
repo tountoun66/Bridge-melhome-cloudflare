@@ -1,5 +1,7 @@
-const COGNITO_LOGIN =
-  "https://live-melcloudhome.auth.eu-west-1.amazoncognito.com/login";
+const AUTH_BASE = "https://auth.melcloudhome.com";
+
+const START_URL =
+  `${AUTH_BASE}/connect/authorize`;
 
 const CLIENT_ID =
   "3g4d5l5kivuqi7oia68gib7uso";
@@ -17,7 +19,7 @@ function html(body, status = 200) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MELCloud OAuth</title>
+<title>MELCloud</title>
 </head>
 <body style="font-family:system-ui;max-width:800px;margin:40px auto;padding:20px">
 ${body}
@@ -33,27 +35,35 @@ ${body}
   );
 }
 
+function esc(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 function b64url(bytes) {
-  let s = "";
+  let binary = "";
 
   for (const b of bytes) {
-    s += String.fromCharCode(b);
+    binary += String.fromCharCode(b);
   }
 
-  return btoa(s)
+  return btoa(binary)
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/g, "");
 }
 
 async function createPkce() {
-  const verifierBytes =
-    crypto.getRandomValues(
-      new Uint8Array(32)
-    );
 
   const verifier =
-    b64url(verifierBytes);
+    b64url(
+      crypto.getRandomValues(
+        new Uint8Array(32)
+      )
+    );
 
   const digest =
     await crypto.subtle.digest(
@@ -72,15 +82,67 @@ async function createPkce() {
   };
 }
 
-async function login(request) {
+
+// ============================================================
+// PAGE PRINCIPALE
+// ============================================================
+
+function home(request) {
+
+  const url =
+    new URL(request.url);
+
+  return html(`
+
+    <h1>❄️ MELCloud</h1>
+
+    <p>
+      Test de connexion officielle MELCloud.
+    </p>
+
+    <hr>
+
+    <a href="/login">
+      <button style="
+        padding:14px 24px;
+        font-size:17px;
+        cursor:pointer;
+      ">
+        🔐 Se connecter à MELCloud
+      </button>
+    </a>
+
+    <hr>
+
+    <h3>Worker</h3>
+
+    <pre>${esc(url.origin)}</pre>
+
+  `);
+}
+
+
+// ============================================================
+// DÉMARRAGE AUTHENTIFICATION
+// ============================================================
+
+async function login() {
 
   const {
     verifier,
     challenge
   } = await createPkce();
 
+  /*
+   * State généré pour cette tentative.
+   */
+
   const state =
     crypto.randomUUID();
+
+  /*
+   * Nonce utilisé par le serveur OAuth.
+   */
 
   const nonce =
     crypto.randomUUID();
@@ -88,68 +150,74 @@ async function login(request) {
   /*
    * IMPORTANT :
    *
-   * On utilise exactement le client Web MELCloud
-   * observé dans ton URL.
+   * On utilise le callback OFFICIEL MELCloud.
    */
 
-  const url =
-    new URL(COGNITO_LOGIN);
+  const authorize =
+    new URL(
+      START_URL
+    );
 
-  url.searchParams.set(
+  authorize.searchParams.set(
     "client_id",
     CLIENT_ID
   );
 
-  url.searchParams.set(
+  authorize.searchParams.set(
     "redirect_uri",
     REDIRECT_URI
   );
 
-  url.searchParams.set(
+  authorize.searchParams.set(
     "response_type",
     "code"
   );
 
-  url.searchParams.set(
+  authorize.searchParams.set(
     "scope",
     SCOPE
   );
 
-  url.searchParams.set(
+  authorize.searchParams.set(
     "code_challenge",
     challenge
   );
 
-  url.searchParams.set(
+  authorize.searchParams.set(
     "code_challenge_method",
     "S256"
   );
 
   /*
-   * C'est le point important de ton URL.
+   * Nous utilisons GET car ton URL réelle
+   * montre bien :
+   *
+   * /signin-oidc-meu?code=...&state=...
    */
 
-  url.searchParams.set(
+  authorize.searchParams.set(
     "response_mode",
-    "form_post"
+    "query"
   );
 
-  url.searchParams.set(
+  authorize.searchParams.set(
     "nonce",
     nonce
   );
 
-  url.searchParams.set(
+  authorize.searchParams.set(
     "state",
     state
   );
 
   /*
-   * On garde les informations PKCE temporairement
-   * dans un cookie.
+   * On conserve les paramètres PKCE.
+   *
+   * Pour l'instant uniquement dans un cookie
+   * de diagnostic.
    */
 
-  const data =
+  const session =
     encodeURIComponent(
       JSON.stringify({
         state,
@@ -162,177 +230,253 @@ async function login(request) {
     status: 302,
 
     headers: {
-      Location: url.toString(),
+
+      Location:
+        authorize.toString(),
 
       "Set-Cookie":
-        `melcloud_oauth=${data}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`
+        `melcloud_test=${session}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`
     }
   });
 }
 
-function readCookie(request, name) {
 
-  const cookie =
-    request.headers.get("Cookie") || "";
-
-  const match =
-    cookie.match(
-      new RegExp(
-        "(?:^|;\\s*)" +
-        name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") +
-        "=([^;]*)"
-      )
-    );
-
-  return match
-    ? decodeURIComponent(match[1])
-    : null;
-}
+// ============================================================
+// DIAGNOSTIC
+// ============================================================
 
 async function debug(request) {
 
   const url =
     new URL(request.url);
 
+  return Response.json({
+    ok: true,
+
+    worker:
+      url.origin,
+
+    authBase:
+      AUTH_BASE,
+
+    authorize:
+      START_URL,
+
+    client_id:
+      CLIENT_ID,
+
+    redirect_uri:
+      REDIRECT_URI,
+
+    response_type:
+      "code",
+
+    response_mode:
+      "query",
+
+    scope:
+      SCOPE
+  });
+}
+
+
+// ============================================================
+// SÉCURITÉ : NE PAS AFFICHER LES TOKENS
+// ============================================================
+
+function mask(value) {
+
+  if (!value) {
+    return null;
+  }
+
+  const s =
+    String(value);
+
+  if (s.length <= 12) {
+    return "***";
+  }
+
+  return (
+    s.slice(0, 6) +
+    "..." +
+    s.slice(-6)
+  );
+}
+
+
+// ============================================================
+// CALLBACK DE TEST
+// ============================================================
+
+async function callback(request) {
+
+  const url =
+    new URL(request.url);
+
+  const code =
+    url.searchParams.get(
+      "code"
+    );
+
+  const state =
+    url.searchParams.get(
+      "state"
+    );
+
+  const error =
+    url.searchParams.get(
+      "error"
+    );
+
+  const errorDescription =
+    url.searchParams.get(
+      "error_description"
+    );
+
+
+  /*
+   * Nous affichons uniquement ce que le Worker
+   * reçoit réellement.
+   */
+
   return html(`
-    <h1>🔎 MELCloud OAuth Test</h1>
 
-    <p><b>Worker :</b></p>
+    <h1>🔎 Résultat OAuth</h1>
 
-    <pre>${url.origin}</pre>
+    <p>
+      Le Worker a reçu un callback.
+    </p>
 
-    <p><b>Cognito :</b></p>
+    <h3>Code</h3>
 
-    <pre>${COGNITO_LOGIN}</pre>
+    <pre>${esc(
+      code
+        ? mask(code)
+        : "aucun"
+    )}</pre>
 
-    <p><b>Client ID :</b></p>
+    <h3>State</h3>
 
-    <pre>${CLIENT_ID}</pre>
+    <pre>${esc(
+      state
+        ? mask(state)
+        : "aucun"
+    )}</pre>
 
-    <p><b>Redirect URI officiel :</b></p>
+    <h3>Erreur</h3>
 
-    <pre>${REDIRECT_URI}</pre>
+    <pre>${esc(
+      error || "aucune"
+    )}</pre>
 
-    <p><b>Response mode :</b></p>
+    <h3>Description</h3>
 
-    <pre>form_post</pre>
+    <pre>${esc(
+      errorDescription || "aucune"
+    )}</pre>
 
     <hr>
 
     <p>
-      <a href="/login">
-        <button style="padding:12px 20px;font-size:16px">
-          🔐 Connexion officielle MELCloud
-        </button>
+      <a href="/">
+        Retour
       </a>
     </p>
+
   `);
 }
 
-async function inspect(request) {
 
-  const body =
-    await request.text();
-
-  return html(`
-    <h1>📨 POST OAuth reçu</h1>
-
-    <p>
-      Cette page permet uniquement de vérifier
-      les paramètres envoyés par MELCloud.
-    </p>
-
-    <h3>Body reçu</h3>
-
-    <pre>${escapeHtml(body)}</pre>
-  `);
-}
-
-function escapeHtml(value) {
-  return String(value || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
+// ============================================================
+// FETCH
+// ============================================================
 
 export default {
 
-  async fetch(request, env) {
+  async fetch(
+    request,
+    env
+  ) {
 
     const url =
       new URL(request.url);
 
     try {
 
-      /*
-       * Page de test
-       */
-
       if (
         request.method === "GET" &&
         url.pathname === "/"
       ) {
-        return debug(request);
+        return home(request);
       }
 
-      /*
-       * Départ vers Cognito officiel
-       */
 
       if (
         request.method === "GET" &&
         url.pathname === "/login"
       ) {
-        return login(request);
+        return await login();
       }
 
+
+      if (
+        request.method === "GET" &&
+        url.pathname === "/debug"
+      ) {
+        return debug(request);
+      }
+
+
       /*
-       * Route de diagnostic POST.
-       *
-       * Elle ne sera utilisée que si un POST arrive
-       * réellement sur le Worker.
+       * Cette route est seulement pour vérifier
+       * le fonctionnement du callback.
        */
 
       if (
-        request.method === "POST" &&
+        request.method === "GET" &&
         url.pathname === "/callback"
       ) {
-        return inspect(request);
+        return callback(request);
       }
 
-      /*
-       * Healthcheck
-       */
 
       if (
         request.method === "GET" &&
         url.pathname === "/health"
       ) {
         return Response.json({
-          ok: true,
-          service: "melcloud-oauth-test",
-          clientId: CLIENT_ID,
-          redirectUri: REDIRECT_URI,
-          responseMode: "form_post"
+          status: "ok",
+          service:
+            "melhome-oauth-test"
         });
       }
 
+
       return new Response(
         "Not found",
-        { status: 404 }
+        {
+          status: 404
+        }
       );
 
     } catch (error) {
 
+      console.error(
+        "[MELCLOUD]",
+        error
+      );
+
       return html(`
+
         <h1>❌ Erreur</h1>
 
-        <pre>${escapeHtml(
+        <pre>${esc(
           error?.stack ||
           error?.message ||
           String(error)
         )}</pre>
+
       `, 500);
     }
   }
