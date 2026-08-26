@@ -6,17 +6,16 @@ const AUTHORIZE_URL = `${AUTH_BASE}/connect/authorize`;
 const API_BASE = "https://mobile.bff.melcloudhome.com";
 
 const CLIENT_ID = "homemobile";
-const REDIRECT_URI = "melcloudhome://";
+const REDIRECT_URI = "https://bridge-melhome-cloudflare.ohare-benjamin.workers.dev/oauth/callback";
+
 const SCOPES = "openid profile email offline_access IdentityServerApi";
 
 const USER_AGENT =
   "MonitorAndControl.App.Mobile/52 CFNetwork/3860.400.51 Darwin/25.3.0";
 
-const COGNITO_SUFFIX = ".amazoncognito.com";
-
 
 // ============================================================
-// D1 - OAUTH
+// D1 / OAUTH
 // ============================================================
 
 async function getOAuth(env) {
@@ -46,8 +45,8 @@ async function saveOAuth(env, t) {
   await env.DB
     .prepare(
       `INSERT INTO oauth_tokens
-      (id,access_token,refresh_token,expires_at,created_at,updated_at)
-      VALUES(?,?,?,?,?,?)`
+      (id, access_token, refresh_token, expires_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)`
     )
     .bind(
       crypto.randomUUID(),
@@ -62,12 +61,14 @@ async function saveOAuth(env, t) {
 
 
 // ============================================================
-// REFRESH TOKEN
+// TOKEN REFRESH
 // ============================================================
 
 async function refresh(env, row) {
   if (!row?.refresh_token) {
-    throw new Error("Aucun refresh_token MELCloud enregistré");
+    throw new Error(
+      "Aucun refresh_token MELCloud enregistré"
+    );
   }
 
   const body = new URLSearchParams({
@@ -80,7 +81,8 @@ async function refresh(env, row) {
     method: "POST",
 
     headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
+      "Content-Type":
+        "application/x-www-form-urlencoded",
       Accept: "application/json",
       "User-Agent": USER_AGENT,
     },
@@ -92,12 +94,17 @@ async function refresh(env, row) {
     const detail = await r.text();
 
     throw new Error(
-      `MELCloud OAuth refresh HTTP ${r.status}: ${detail.slice(0, 500)}`
+      `MELCloud OAuth refresh HTTP ${r.status}: ${detail.slice(
+        0,
+        300
+      )}`
     );
   }
 
   const t = await r.json();
 
+  // Certains serveurs OAuth ne renvoient pas
+  // le refresh_token lors d'un refresh.
   if (!t.refresh_token) {
     t.refresh_token = row.refresh_token;
   }
@@ -108,20 +115,19 @@ async function refresh(env, row) {
 }
 
 
-// ============================================================
-// ACCESS TOKEN
-// ============================================================
-
 async function token(env) {
   const row = await getOAuth(env);
 
   if (!row) {
-    throw new Error("Aucun compte MELCloud OAuth enregistré");
+    throw new Error(
+      "Aucun compte MELCloud OAuth enregistré"
+    );
   }
 
   if (
     row.access_token &&
-    Number(row.expires_at) > Date.now() + 300000
+    Number(row.expires_at) >
+      Date.now() + 300000
   ) {
     return row.access_token;
   }
@@ -143,19 +149,23 @@ async function mel(env, path, opt = {}) {
       ...opt,
 
       headers: {
-        Accept: "application/json, text/plain, */*",
+        Accept:
+          "application/json, text/plain, */*",
+
         "User-Agent": USER_AGENT,
+
         ...(opt.headers || {}),
+
         Authorization: `Bearer ${t}`,
       },
     }
   );
 
+  // Si le token est refusé, on le renouvelle une fois.
   if (r.status === 401) {
-    t = await refresh(
-      env,
-      await getOAuth(env)
-    );
+    const row = await getOAuth(env);
+
+    t = await refresh(env, row);
 
     r = await fetch(
       `${API_BASE}/${path.replace(/^\//, "")}`,
@@ -163,9 +173,13 @@ async function mel(env, path, opt = {}) {
         ...opt,
 
         headers: {
-          Accept: "application/json, text/plain, */*",
+          Accept:
+            "application/json, text/plain, */*",
+
           "User-Agent": USER_AGENT,
+
           ...(opt.headers || {}),
+
           Authorization: `Bearer ${t}`,
         },
       }
@@ -177,858 +191,7 @@ async function mel(env, path, opt = {}) {
 
 
 // ============================================================
-// COOKIES
-// ============================================================
-
-function setCookies(jar, response) {
-  let values = [];
-
-  try {
-    if (
-      typeof response.headers.getSetCookie ===
-      "function"
-    ) {
-      values =
-        response.headers.getSetCookie();
-    }
-  } catch (_) {}
-
-  if (!values.length) {
-    const raw =
-      response.headers.get("set-cookie");
-
-    if (raw) {
-      values = raw.split(
-        /,(?=\s*[^;,=\s]+=[^;,]+)/
-      );
-    }
-  }
-
-  for (const value of values) {
-    const pair =
-      value.split(";", 1)[0];
-
-    const i = pair.indexOf("=");
-
-    if (i > 0) {
-      jar.set(
-        pair.slice(0, i).trim(),
-        pair.slice(i + 1).trim()
-      );
-    }
-  }
-}
-
-
-function cookieHeader(jar) {
-  return [...jar.entries()]
-    .map(([k, v]) => `${k}=${v}`)
-    .join("; ");
-}
-
-
-// ============================================================
-// HTTP AVEC COOKIES + REDIRECTIONS
-// ============================================================
-
-async function httpWithCookies(
-  url,
-  init = {},
-  jar = new Map(),
-  maxRedirects = 10
-) {
-  let current = url;
-
-  let options = {
-    ...init,
-    redirect: "manual",
-  };
-
-  for (let i = 0; i <= maxRedirects; i++) {
-    const headers =
-      new Headers(options.headers || {});
-
-    const cookies = cookieHeader(jar);
-
-    if (cookies) {
-      headers.set("Cookie", cookies);
-    }
-
-    const response = await fetch(
-      current,
-      {
-        ...options,
-        headers,
-        redirect: "manual",
-      }
-    );
-
-    setCookies(jar, response);
-
-    if (
-      response.status >= 300 &&
-      response.status < 400
-    ) {
-      const location =
-        response.headers.get("location");
-
-      if (!location) {
-        return {
-          response,
-          url: current,
-        };
-      }
-
-      const next =
-        new URL(
-          location,
-          current
-        ).toString();
-
-      if (
-        /^melcloudhome:\/\//i.test(next)
-      ) {
-        return {
-          response,
-          url: next,
-        };
-      }
-
-      current = next;
-
-      options = {
-        method: "GET",
-
-        headers: {
-          "User-Agent": USER_AGENT,
-          Accept:
-            "text/html,application/xhtml+xml",
-        },
-      };
-
-      continue;
-    }
-
-    return {
-      response,
-      url: current,
-    };
-  }
-
-  throw new Error(
-    "Trop de redirections pendant l'authentification MELCloud"
-  );
-}
-
-
-// ============================================================
-// HTML HELPERS
-// ============================================================
-
-function extractCsrf(html) {
-  const patterns = [
-    /name=["']_csrf["'][^>]*value=["']([^"']+)["']/i,
-    /value=["']([^"']+)["'][^>]*name=["']_csrf["']/i,
-  ];
-
-  for (const p of patterns) {
-    const m = html.match(p);
-
-    if (m) {
-      return m[1];
-    }
-  }
-
-  return null;
-}
-
-
-function extractFormAction(html, baseUrl) {
-  const m =
-    html.match(
-      /<form\b[^>]*\baction=["']([^"']+)["'][^>]*>/i
-    ) ||
-    html.match(/<form\b[^>]*>/i);
-
-  if (!m) {
-    return baseUrl;
-  }
-
-  const action = m[1] || "";
-
-  try {
-    return new URL(
-      action || baseUrl,
-      baseUrl
-    ).toString();
-  } catch (_) {
-    return baseUrl;
-  }
-}
-
-
-function extractHiddenInputs(html) {
-  const out = {};
-
-  const re =
-    /<input\b[^>]*>/gi;
-
-  for (
-    const tag of html.match(re) || []
-  ) {
-    const type =
-      (
-        tag.match(
-          /\btype=["']([^"']+)["']/i
-        )?.[1] ||
-        "hidden"
-      ).toLowerCase();
-
-    if (type !== "hidden") {
-      continue;
-    }
-
-    const name =
-      tag.match(
-        /\bname=["']([^"']+)["']/i
-      )?.[1];
-
-    if (!name) {
-      continue;
-    }
-
-    const value =
-      tag.match(
-        /\bvalue=["']([^"']*)["']/i
-      )?.[1] ?? "";
-
-    out[name] = value;
-  }
-
-  return out;
-}
-
-
-// ============================================================
-// OAUTH CODE
-// ============================================================
-
-function extractCode(value) {
-  const text = String(value || "")
-    .replace(/&amp;/gi, "&")
-    .replace(/\\u0026/g, "&");
-
-  const direct =
-    text.match(
-      /[?&]code=([^&\s"'<>#]+)/i
-    );
-
-  if (direct) {
-    try {
-      return decodeURIComponent(
-        direct[1]
-      );
-    } catch (_) {
-      return direct[1];
-    }
-  }
-
-  const encoded =
-    text.match(
-      /(?:code%3D|code\\u003d)([^&%\s"'<>#]+)/i
-    );
-
-  if (encoded) {
-    try {
-      return decodeURIComponent(
-        encoded[1]
-      );
-    } catch (_) {
-      return encoded[1];
-    }
-  }
-
-  return null;
-}
-
-
-function extractOAuthError(value) {
-  const text = String(value || "")
-    .replace(/&amp;/gi, "&");
-
-  const m =
-    text.match(
-      /[?&]error=([^&\s"'<>#]+)/i
-    );
-
-  if (!m) {
-    return null;
-  }
-
-  let err = m[1];
-
-  try {
-    err = decodeURIComponent(err);
-  } catch (_) {}
-
-  const d =
-    text.match(
-      /[?&]error_description=([^&\s"'<>#]+)/i
-    );
-
-  if (d) {
-    try {
-      return `${err}: ${decodeURIComponent(
-        d[1]
-      )}`;
-    } catch (_) {}
-  }
-
-  return err;
-}
-
-
-// ============================================================
-// MELCLOUD LOGIN OAuth PKCE
-// ============================================================
-
-async function loginToMelcloud(
-  email,
-  password
-) {
-  const jar = new Map();
-
-  // PKCE verifier
-  const verifier =
-    b64url(
-      crypto.getRandomValues(
-        new Uint8Array(32)
-      )
-    );
-
-  // PKCE challenge
-  const digest =
-    await crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode(
-        verifier
-      )
-    );
-
-  const challenge =
-    b64url(
-      new Uint8Array(digest)
-    );
-
-  // OAuth state
-  const state =
-    b64url(
-      crypto.getRandomValues(
-        new Uint8Array(16)
-      )
-    );
-
-
-  // ========================================================
-  // PAR
-  // ========================================================
-
-  const parBody =
-    new URLSearchParams({
-      response_type: "code",
-      state,
-      code_challenge: challenge,
-      code_challenge_method: "S256",
-      client_id: CLIENT_ID,
-      scope: SCOPES,
-      redirect_uri: REDIRECT_URI,
-    });
-
-  const par =
-    await fetch(
-      PAR_URL,
-      {
-        method: "POST",
-
-        headers: {
-          "Content-Type":
-            "application/x-www-form-urlencoded",
-          Accept: "application/json",
-          "User-Agent": USER_AGENT,
-        },
-
-        body:
-          parBody.toString(),
-      }
-    );
-
-  if (par.status !== 201) {
-    const detail =
-      await par.text();
-
-    throw new Error(
-      `MELCloud PAR HTTP ${par.status}: ${detail.slice(
-        0,
-        500
-      )}`
-    );
-  }
-
-  const parData =
-    await par.json();
-
-  if (!parData.request_uri) {
-    throw new Error(
-      "MELCloud n'a pas fourni de request_uri"
-    );
-  }
-
-
-  // ========================================================
-  // AUTHORIZE
-  // ========================================================
-
-  const authorize =
-    `${AUTHORIZE_URL}?client_id=${encodeURIComponent(
-      CLIENT_ID
-    )}&request_uri=${encodeURIComponent(
-      parData.request_uri
-    )}`;
-
-
-  const first =
-    await httpWithCookies(
-      authorize,
-      {
-        method: "GET",
-
-        headers: {
-          "User-Agent": USER_AGENT,
-          Accept:
-            "text/html,application/xhtml+xml",
-        },
-      },
-      jar
-    );
-
-
-  let authCode =
-    extractCode(first.url);
-
-  if (authCode) {
-    return await exchangeCode(
-      authCode,
-      verifier
-    );
-  }
-
-
-  const finalHost =
-    (() => {
-      try {
-        return (
-          new URL(first.url)
-            .hostname || ""
-        );
-      } catch (_) {
-        return "";
-      }
-    })();
-
-
-  const body =
-    await first.response.text();
-
-
-  // ========================================================
-  // ERREUR OAUTH
-  // ========================================================
-
-  const firstError =
-    extractOAuthError(first.url) ||
-    extractOAuthError(body);
-
-  if (firstError) {
-    throw new Error(
-      `MELCloud OAuth: ${firstError}`
-    );
-  }
-
-
-  // ========================================================
-  // COGNITO LOGIN
-  // ========================================================
-
-  if (
-    finalHost.endsWith(
-      COGNITO_SUFFIX
-    ) &&
-    /\/login/i.test(first.url)
-  ) {
-    const csrf =
-      extractCsrf(body);
-
-    if (!csrf) {
-      throw new Error(
-        "Impossible de récupérer le jeton CSRF MELCloud"
-      );
-    }
-
-
-    const action =
-      extractFormAction(
-        body,
-        first.url
-      );
-
-
-    const hidden =
-      extractHiddenInputs(body);
-
-    hidden._csrf = csrf;
-    hidden.username = email;
-    hidden.password = password;
-
-
-    if (
-      !Object.prototype.hasOwnProperty.call(
-        hidden,
-        "cognitoAsfData"
-      )
-    ) {
-      hidden.cognitoAsfData = "";
-    }
-
-
-    const form =
-      new URLSearchParams();
-
-
-    for (
-      const [k, v] of Object.entries(
-        hidden
-      )
-    ) {
-      form.set(
-        k,
-        String(v)
-      );
-    }
-
-
-    // ======================================================
-    // POST LOGIN
-    // ======================================================
-
-    const logged =
-      await httpWithCookies(
-        action,
-        {
-          method: "POST",
-
-          headers: {
-            "User-Agent":
-              "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/22F76",
-
-            "Content-Type":
-              "application/x-www-form-urlencoded",
-
-            Origin:
-              `https://${finalHost}`,
-
-            Referer:
-              first.url,
-
-            Accept:
-              "text/html,application/xhtml+xml",
-          },
-
-          body:
-            form.toString(),
-        },
-        jar
-      );
-
-
-    // ======================================================
-    // CODE DIRECTEMENT DANS URL
-    // ======================================================
-
-    authCode =
-      extractCode(
-        logged.url
-      );
-
-    if (authCode) {
-      return await exchangeCode(
-        authCode,
-        verifier
-      );
-    }
-
-
-    // ======================================================
-    // CODE DANS BODY
-    // ======================================================
-
-    const loggedBody =
-      await logged.response.text();
-
-
-    authCode =
-      extractCode(
-        loggedBody
-      );
-
-    if (authCode) {
-      return await exchangeCode(
-        authCode,
-        verifier
-      );
-    }
-
-
-    // ======================================================
-    // ERREUR OAUTH DANS URL/BODY
-    // ======================================================
-
-    const err =
-      extractOAuthError(
-        logged.url
-      ) ||
-      extractOAuthError(
-        loggedBody
-      );
-
-    if (err) {
-      throw new Error(
-        `MELCloud OAuth après connexion: ${err}`
-      );
-    }
-
-
-    // ======================================================
-    // CALLBACK POSSIBLE DANS HTML
-    // ======================================================
-
-    const callbackMatches = [
-      logged.url,
-
-      ...Array.from(
-        loggedBody.matchAll(
-          /(?:href|action|location)=["']([^"']*\/connect\/authorize\/callback\?[^"']*)["']/gi
-        )
-      ).map(
-        m => m[1]
-      ),
-
-      ...Array.from(
-        loggedBody.matchAll(
-          /(\/connect\/authorize\/callback\?[^"'\s<>]+)/gi
-        )
-      ).map(
-        m => m[1]
-      ),
-    ];
-
-
-    for (
-      const candidate of callbackMatches
-    ) {
-      try {
-        const callbackUrl =
-          new URL(
-            candidate,
-            logged.url
-          ).toString();
-
-        const callbackResult =
-          await httpWithCookies(
-            callbackUrl,
-            {
-              method: "GET",
-
-              headers: {
-                "User-Agent":
-                  USER_AGENT,
-
-                Accept:
-                  "text/html,application/xhtml+xml",
-              },
-            },
-            jar
-          );
-
-
-        authCode =
-          extractCode(
-            callbackResult.url
-          ) ||
-          extractCode(
-            await callbackResult.response.text()
-          );
-
-
-        if (authCode) {
-          return await exchangeCode(
-            authCode,
-            verifier
-          );
-        }
-      } catch (_) {}
-    }
-
-
-    // ======================================================
-    // CODE ÉVENTUELLEMENT DANS ACTION
-    // ======================================================
-
-    const formActionCode =
-      extractCode(action);
-
-    if (formActionCode) {
-      return await exchangeCode(
-        formActionCode,
-        verifier
-      );
-    }
-
-
-    // ======================================================
-    // NOUVEAU DEBUG IMPORTANT
-    // ======================================================
-
-    const errorText =
-      loggedBody
-        .replace(
-          /<script[\s\S]*?<\/script>/gi,
-          " "
-        )
-        .replace(
-          /<style[\s\S]*?<\/style>/gi,
-          " "
-        )
-        .replace(
-          /<[^>]+>/g,
-          " "
-        )
-        .replace(
-          /\s+/g,
-          " "
-        )
-        .trim();
-
-
-    throw new Error(
-      `Connexion MELCloud refusée ou redirection OAuth introuvable ` +
-      `(HTTP ${logged.response.status}, URL ${logged.url}, ` +
-      `DETAIL=${errorText.slice(0, 1500)})`
-    );
-  }
-
-
-  // ========================================================
-  // CODE DANS LA PAGE INITIALE
-  // ========================================================
-
-  authCode =
-    extractCode(body);
-
-  if (authCode) {
-    return await exchangeCode(
-      authCode,
-      verifier
-    );
-  }
-
-
-  throw new Error(
-    `MELCloud n'a pas renvoyé de code OAuth ` +
-    `(étape ${finalHost || "inconnue"}, HTTP ${first.response.status}, URL ${first.url})`
-  );
-}
-
-
-// ============================================================
-// TOKEN EXCHANGE
-// ============================================================
-
-async function exchangeCode(
-  authCode,
-  verifier
-) {
-  const tokenBody =
-    new URLSearchParams({
-      grant_type:
-        "authorization_code",
-
-      code:
-        authCode,
-
-      redirect_uri:
-        REDIRECT_URI,
-
-      code_verifier:
-        verifier,
-
-      client_id:
-        CLIENT_ID,
-    });
-
-
-  const tokenResponse =
-    await fetch(
-      TOKEN_URL,
-      {
-        method: "POST",
-
-        headers: {
-          "Content-Type":
-            "application/x-www-form-urlencoded",
-
-          Accept:
-            "application/json",
-
-          "User-Agent":
-            USER_AGENT,
-        },
-
-        body:
-          tokenBody.toString(),
-      }
-    );
-
-
-  if (!tokenResponse.ok) {
-    const detail =
-      await tokenResponse.text();
-
-    throw new Error(
-      `MELCloud échange OAuth HTTP ${tokenResponse.status}: ${detail.slice(
-        0,
-        500
-      )}`
-    );
-  }
-
-
-  const tokens =
-    await tokenResponse.json();
-
-
-  if (!tokens.refresh_token) {
-    throw new Error(
-      "MELCloud n'a pas renvoyé de refresh_token"
-    );
-  }
-
-
-  return tokens;
-}
-
-
-// ============================================================
-// BASE64 URL
+// PKCE
 // ============================================================
 
 function b64url(bytes) {
@@ -1045,8 +208,584 @@ function b64url(bytes) {
 }
 
 
+async function createPKCE() {
+  const verifierBytes =
+    crypto.getRandomValues(
+      new Uint8Array(32)
+    );
+
+  const verifier =
+    b64url(verifierBytes);
+
+  const digest =
+    await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(verifier)
+    );
+
+  const challenge =
+    b64url(new Uint8Array(digest));
+
+  return {
+    verifier,
+    challenge,
+  };
+}
+
+
 // ============================================================
-// MELCLOUD DATA HELPERS
+// COOKIE HELPERS
+// ============================================================
+
+function setCookie(name, value, maxAge = 600) {
+  return [
+    `${name}=${encodeURIComponent(value)}`,
+    "Path=/",
+    "HttpOnly",
+    "Secure",
+    "SameSite=Lax",
+    `Max-Age=${maxAge}`,
+  ].join("; ");
+}
+
+
+function getCookie(request, name) {
+  const cookieHeader =
+    request.headers.get("Cookie") || "";
+
+  const cookies =
+    cookieHeader.split(";");
+
+  for (const cookie of cookies) {
+    const index = cookie.indexOf("=");
+
+    if (index === -1) continue;
+
+    const key =
+      cookie.slice(0, index).trim();
+
+    if (key !== name) continue;
+
+    return decodeURIComponent(
+      cookie.slice(index + 1).trim()
+    );
+  }
+
+  return null;
+}
+
+
+// ============================================================
+// OAUTH LOGIN
+// ============================================================
+
+async function startOAuth(request) {
+  const { verifier, challenge } =
+    await createPKCE();
+
+  const state =
+    b64url(
+      crypto.getRandomValues(
+        new Uint8Array(32)
+      )
+    );
+
+  // ----------------------------------------------------------
+  // Pushed Authorization Request
+  // ----------------------------------------------------------
+
+  const parBody =
+    new URLSearchParams({
+      response_type: "code",
+
+      state,
+
+      code_challenge: challenge,
+
+      code_challenge_method: "S256",
+
+      client_id: CLIENT_ID,
+
+      scope: SCOPES,
+
+      redirect_uri: REDIRECT_URI,
+    });
+
+
+  const par =
+    await fetch(PAR_URL, {
+      method: "POST",
+
+      headers: {
+        "Content-Type":
+          "application/x-www-form-urlencoded",
+
+        Accept: "application/json",
+
+        "User-Agent": USER_AGENT,
+      },
+
+      body: parBody.toString(),
+    });
+
+
+  if (!par.ok) {
+    const detail =
+      await par.text();
+
+    throw new Error(
+      `MELCloud PAR HTTP ${par.status}: ${detail.slice(
+        0,
+        300
+      )}`
+    );
+  }
+
+
+  const parData =
+    await par.json();
+
+
+  if (!parData.request_uri) {
+    throw new Error(
+      "MELCloud n'a pas fourni de request_uri"
+    );
+  }
+
+
+  // ----------------------------------------------------------
+  // URL officielle MELCloud
+  // ----------------------------------------------------------
+
+  const authorize =
+    new URL(AUTHORIZE_URL);
+
+  authorize.searchParams.set(
+    "client_id",
+    CLIENT_ID
+  );
+
+  authorize.searchParams.set(
+    "request_uri",
+    parData.request_uri
+  );
+
+
+  // ----------------------------------------------------------
+  // On stocke temporairement le PKCE + state
+  // dans des cookies HttpOnly.
+  // ----------------------------------------------------------
+
+  const headers =
+    new Headers({
+      Location:
+        authorize.toString(),
+      "Cache-Control":
+        "no-store",
+    });
+
+
+  headers.append(
+    "Set-Cookie",
+    setCookie(
+      "mel_oauth_verifier",
+      verifier
+    )
+  );
+
+
+  headers.append(
+    "Set-Cookie",
+    setCookie(
+      "mel_oauth_state",
+      state
+    )
+  );
+
+
+  return new Response(null, {
+    status: 302,
+    headers,
+  });
+}
+
+
+// ============================================================
+// OAUTH CALLBACK
+// ============================================================
+
+async function oauthCallback(request, env) {
+  const url =
+    new URL(request.url);
+
+
+  const error =
+    url.searchParams.get("error");
+
+
+  const errorDescription =
+    url.searchParams.get(
+      "error_description"
+    );
+
+
+  if (error) {
+    return page(
+      `
+      <h1>❌ Connexion MELCloud refusée</h1>
+
+      <p>
+        ${escapeHtml(error)}
+      </p>
+
+      ${
+        errorDescription
+          ? `<p>${escapeHtml(
+              errorDescription
+            )}</p>`
+          : ""
+      }
+
+      <p>
+        <a href="/setup">
+          Réessayer
+        </a>
+      </p>
+      `,
+      400
+    );
+  }
+
+
+  const code =
+    url.searchParams.get("code");
+
+
+  if (!code) {
+    return page(
+      `
+      <h1>❌ Code OAuth manquant</h1>
+
+      <p>
+        MELCloud n'a pas renvoyé de code
+        d'autorisation.
+      </p>
+
+      <p>
+        <a href="/setup">
+          Réessayer
+        </a>
+      </p>
+      `,
+      400
+    );
+  }
+
+
+  const verifier =
+    getCookie(
+      request,
+      "mel_oauth_verifier"
+    );
+
+
+  const expectedState =
+    getCookie(
+      request,
+      "mel_oauth_state"
+    );
+
+
+  const returnedState =
+    url.searchParams.get("state");
+
+
+  if (!verifier) {
+    return page(
+      `
+      <h1>❌ Session OAuth expirée</h1>
+
+      <p>
+        La session de connexion a expiré.
+      </p>
+
+      <p>
+        <a href="/setup">
+          Recommencer la connexion
+        </a>
+      </p>
+      `,
+      400
+    );
+  }
+
+
+  if (
+    expectedState &&
+    returnedState &&
+    expectedState !== returnedState
+  ) {
+    return page(
+      `
+      <h1>❌ Erreur de sécurité OAuth</h1>
+
+      <p>
+        Le paramètre state ne correspond pas.
+      </p>
+
+      <p>
+        <a href="/setup">
+          Réessayer
+        </a>
+      </p>
+      `,
+      400
+    );
+  }
+
+
+  // ----------------------------------------------------------
+  // Exchange code -> tokens
+  // ----------------------------------------------------------
+
+  const tokenBody =
+    new URLSearchParams({
+      grant_type:
+        "authorization_code",
+
+      code,
+
+      redirect_uri:
+        REDIRECT_URI,
+
+      code_verifier:
+        verifier,
+
+      client_id:
+        CLIENT_ID,
+    });
+
+
+  const tokenResponse =
+    await fetch(TOKEN_URL, {
+      method: "POST",
+
+      headers: {
+        "Content-Type":
+          "application/x-www-form-urlencoded",
+
+        Accept:
+          "application/json",
+
+        "User-Agent":
+          USER_AGENT,
+      },
+
+      body:
+        tokenBody.toString(),
+    });
+
+
+  if (!tokenResponse.ok) {
+    const detail =
+      await tokenResponse.text();
+
+    return page(
+      `
+      <h1>❌ Échange OAuth impossible</h1>
+
+      <p>
+        MELCloud a répondu HTTP
+        ${tokenResponse.status}.
+      </p>
+
+      <pre style="white-space:pre-wrap">${escapeHtml(
+        detail.slice(0, 1000)
+      )}</pre>
+
+      <p>
+        <a href="/setup">
+          Réessayer
+        </a>
+      </p>
+      `,
+      400
+    );
+  }
+
+
+  const tokens =
+    await tokenResponse.json();
+
+
+  if (!tokens.refresh_token) {
+    return page(
+      `
+      <h1>❌ Refresh token manquant</h1>
+
+      <p>
+        MELCloud a accepté la connexion
+        mais n'a pas fourni de refresh_token.
+      </p>
+
+      <p>
+        <a href="/setup">
+          Réessayer
+        </a>
+      </p>
+      `,
+      400
+    );
+  }
+
+
+  // ----------------------------------------------------------
+  // Sauvegarde D1
+  // ----------------------------------------------------------
+
+  await saveOAuth(
+    env,
+    tokens
+  );
+
+
+  // ----------------------------------------------------------
+  // Nettoyage des cookies OAuth
+  // ----------------------------------------------------------
+
+  const headers =
+    new Headers({
+      "Cache-Control":
+        "no-store",
+    });
+
+
+  headers.append(
+    "Set-Cookie",
+    setCookie(
+      "mel_oauth_verifier",
+      "",
+      0
+    )
+  );
+
+
+  headers.append(
+    "Set-Cookie",
+    setCookie(
+      "mel_oauth_state",
+      "",
+      0
+    )
+  );
+
+
+  return new Response(
+    `<!doctype html>
+<html lang="fr">
+<head>
+<meta name="viewport"
+content="width=device-width,initial-scale=1">
+<title>MELHome Bridge</title>
+</head>
+
+<body style="
+font-family:system-ui;
+max-width:700px;
+margin:40px auto;
+padding:20px
+">
+
+<h1>✅ MELCloud connecté</h1>
+
+<p>
+La connexion MELCloud a été enregistrée
+dans Cloudflare D1.
+</p>
+
+<p>
+Le Worker pourra maintenant renouveler
+automatiquement le token lorsque celui-ci
+expire.
+</p>
+
+<p>
+<a href="/api/status">
+Vérifier le statut
+</a>
+</p>
+
+</body>
+</html>`,
+    {
+      status: 200,
+      headers,
+    }
+  );
+}
+
+
+// ============================================================
+// HTML HELPERS
+// ============================================================
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+
+function page(
+  body,
+  status = 200,
+  extraHeaders = {}
+) {
+  return new Response(
+    `<!doctype html>
+<html lang="fr">
+
+<head>
+<meta charset="utf-8">
+<meta name="viewport"
+content="width=device-width,initial-scale=1">
+
+<title>MELHome Bridge</title>
+</head>
+
+<body style="
+font-family:system-ui;
+max-width:700px;
+margin:40px auto;
+padding:20px
+">
+
+${body}
+
+</body>
+</html>`,
+
+    {
+      status,
+
+      headers: {
+        "content-type":
+          "text/html;charset=utf-8",
+
+        "cache-control":
+          "no-store",
+
+        ...extraHeaders,
+      },
+    }
+  );
+}
+
+
+// ============================================================
+// MELCLOUD DEVICE HELPERS
 // ============================================================
 
 function setting(c, ks) {
@@ -1063,9 +802,10 @@ function setting(c, ks) {
     ]
   ) {
     for (
-      const x of Array.isArray(c?.[n])
-        ? c[n]
-        : []
+      const x of
+        Array.isArray(c?.[n])
+          ? c[n]
+          : []
     ) {
       if (
         ks.some(
@@ -1159,7 +899,6 @@ function mode(c) {
         "Automatic"
     ).toLowerCase();
 
-
   if (m.includes("cool"))
     return "cool";
 
@@ -1187,7 +926,6 @@ function fan(c) {
       ]) ?? ""
     ).toLowerCase();
 
-
   return s.includes("one") ||
     s === "1"
     ? "One"
@@ -1206,10 +944,6 @@ function fan(c) {
     : "Auto";
 }
 
-
-// ============================================================
-// GOOGLE HOME DEVICES
-// ============================================================
 
 function devices(cs) {
   return cs.map(c => ({
@@ -1232,7 +966,8 @@ function devices(cs) {
         "Climatiseur",
     },
 
-    willReportState: false,
+    willReportState:
+      false,
 
     attributes: {
       availableThermostatModes:
@@ -1351,6 +1086,10 @@ async function fulfillment(
       ?.airToAirUnits || [];
 
 
+  // ----------------------------------------------------------
+  // SYNC
+  // ----------------------------------------------------------
+
   if (
     intent ===
     "action.devices.SYNC"
@@ -1369,6 +1108,10 @@ async function fulfillment(
   }
 
 
+  // ----------------------------------------------------------
+  // QUERY
+  // ----------------------------------------------------------
+
   if (
     intent ===
     "action.devices.QUERY"
@@ -1383,7 +1126,10 @@ async function fulfillment(
 
       d[x] = {
         online: true,
-        status: "SUCCESS",
+
+        status:
+          "SUCCESS",
+
         thermostatMode:
           mode(c),
 
@@ -1409,6 +1155,10 @@ async function fulfillment(
   }
 
 
+  // ----------------------------------------------------------
+  // EXECUTE
+  // ----------------------------------------------------------
+
   if (
     intent ===
     "action.devices.EXECUTE"
@@ -1418,12 +1168,13 @@ async function fulfillment(
 
     for (
       const cmd of
-      b?.inputs?.[0]?.payload
-        ?.commands || []
+        b?.inputs?.[0]
+          ?.payload
+          ?.commands || []
     ) {
       for (
         const dev of
-        cmd.devices || []
+          cmd.devices || []
       ) {
         const c =
           cs.find(
@@ -1431,7 +1182,9 @@ async function fulfillment(
               String(
                 x.id ?? x.ID
               ) ===
-              String(dev.id)
+              String(
+                dev.id
+              )
           );
 
 
@@ -1442,21 +1195,33 @@ async function fulfillment(
 
         const p = {
           power: null,
-          operationMode: null,
-          setFanSpeed: null,
-          setTemperature: null,
+
+          operationMode:
+            null,
+
+          setFanSpeed:
+            null,
+
+          setTemperature:
+            null,
+
           vaneHorizontalDirection:
             null,
+
           vaneVerticalDirection:
             null,
+
           temperatureIncrementOverride:
             null,
-          inStandbyMode: null,
+
+          inStandbyMode:
+            null,
         };
 
 
         const s = {
           online: true,
+
           thermostatMode:
             mode(c),
 
@@ -1470,7 +1235,8 @@ async function fulfillment(
 
         for (
           const e of
-          cmd.execution || []
+            cmd.execution ||
+            []
         ) {
           if (
             e.command ===
@@ -1512,23 +1278,34 @@ async function fulfillment(
               m;
 
 
-            if (m === "off") {
-              p.power = false;
+            if (
+              m === "off"
+            ) {
+              p.power =
+                false;
             } else {
               if (
                 !on(c) &&
                 p.power === null
               ) {
-                p.power = true;
+                p.power =
+                  true;
               }
+
 
               p.operationMode =
                 ({
                   cool: "Cool",
+
                   heat: "Heat",
+
                   dry: "Dry",
-                  "fan-only": "Fan",
-                  auto: "Automatic",
+
+                  "fan-only":
+                    "Fan",
+
+                  auto:
+                    "Automatic",
                 })[m] ??
                 null;
             }
@@ -1540,10 +1317,12 @@ async function fulfillment(
             "action.devices.commands.SetFanSpeed"
           ) {
             p.setFanSpeed =
-              e.params.fanSpeed;
+              e.params
+                .fanSpeed;
 
             s.currentFanSpeedSetting =
-              e.params.fanSpeed;
+              e.params
+                .fanSpeed;
           }
         }
 
@@ -1612,39 +1391,9 @@ async function fulfillment(
 
   return Response.json({
     requestId: id,
+
     payload: {},
   });
-}
-
-
-// ============================================================
-// HTML PAGE
-// ============================================================
-
-function page(
-  body,
-  status = 200
-) {
-  return new Response(
-    `<!doctype html>
-<html lang="fr">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<body style="font-family:system-ui;max-width:700px;margin:40px auto;padding:20px">
-${body}
-</body>
-</html>`,
-    {
-      status,
-
-      headers: {
-        "content-type":
-          "text/html;charset=utf-8",
-
-        "cache-control":
-          "no-store",
-      },
-    }
-  );
 }
 
 
@@ -1653,23 +1402,28 @@ ${body}
 // ============================================================
 
 export default {
-  async fetch(req, env) {
+  async fetch(
+    req,
+    env
+  ) {
     const u =
       new URL(req.url);
 
 
     try {
 
-      // ======================================================
+      // ------------------------------------------------------
       // STATUS
-      // ======================================================
+      // ------------------------------------------------------
 
       if (
         req.method === "GET" &&
-        u.pathname === "/api/status"
+        u.pathname ===
+          "/api/status"
       ) {
         const o =
           await getOAuth(env);
+
 
         return Response.json({
           ok: true,
@@ -1684,9 +1438,9 @@ export default {
       }
 
 
-      // ======================================================
-      // SETUP GET
-      // ======================================================
+      // ------------------------------------------------------
+      // SETUP
+      // ------------------------------------------------------
 
       if (
         req.method === "GET" &&
@@ -1697,182 +1451,85 @@ export default {
 
 
         return page(`
-<h1>❄️ MELHome Bridge</h1>
+          <h1>
+            ❄️ MELHome Bridge
+          </h1>
 
-<p>
-Connexion directe à MELCloud Home.
-</p>
+          <p>
+            Connexion officielle
+            à MELCloud Home.
+          </p>
 
-<p>
-État OAuth :
-<b>
-${
-  o?.refresh_token
-    ? "CONFIGURE"
-    : "NON CONFIGURE"
-}
-</b>
-</p>
+          <p>
+            État OAuth :
+            <b>
+              ${
+                o?.refresh_token
+                  ? "CONFIGURE"
+                  : "NON CONFIGURE"
+              }
+            </b>
+          </p>
 
-<form
-  method="POST"
-  action="/setup"
->
+          <p>
+            La connexion se fera
+            directement sur la page
+            officielle MELCloud.
+          </p>
 
-<label>
-E-mail MELCloud
-</label>
-
-<br>
-
-<input
-  name="email"
-  type="email"
-  autocomplete="username"
-  required
-  style="width:100%;padding:10px;margin:6px 0 14px"
->
-
-<label>
-Mot de passe MELCloud
-</label>
-
-<br>
-
-<input
-  name="password"
-  type="password"
-  autocomplete="current-password"
-  required
-  style="width:100%;padding:10px;margin:6px 0 14px"
->
-
-<button
-  type="submit"
-  style="padding:10px 18px"
->
-Connecter MELCloud
-</button>
-
-</form>
-
-<p style="font-size:13px">
-Le Worker utilise ces identifiants uniquement pendant cette requête pour obtenir le refresh_token OAuth.
-Ils ne sont pas enregistrés dans D1.
-</p>
-`);
+          <p>
+            <a
+              href="/oauth/start"
+              style="
+                display:inline-block;
+                padding:12px 20px;
+                background:#111;
+                color:white;
+                text-decoration:none;
+                border-radius:8px;
+              "
+            >
+              Se connecter avec MELCloud
+            </a>
+          </p>
+        `);
       }
 
 
-      // ======================================================
-      // SETUP POST
-      // ======================================================
+      // ------------------------------------------------------
+      // START OAUTH
+      // ------------------------------------------------------
 
       if (
-        req.method === "POST" &&
-        u.pathname === "/setup"
+        req.method === "GET" &&
+        u.pathname ===
+          "/oauth/start"
       ) {
-        const f =
-          await req.formData();
-
-
-        const email =
-          String(
-            f.get("email") ||
-            ""
-          ).trim();
-
-
-        const password =
-          String(
-            f.get("password") ||
-            ""
-          );
-
-
-        if (
-          !email ||
-          !password
-        ) {
-          return page(
-            `<h2>Identifiants manquants</h2>
-             <p><a href="/setup">Retour</a></p>`,
-            400
-          );
-        }
-
-
-        try {
-
-          const tokens =
-            await loginToMelcloud(
-              email,
-              password
-            );
-
-
-          await saveOAuth(
-            env,
-            tokens
-          );
-
-
-          return page(`
-<h1>✅ MELCloud connecté</h1>
-
-<p>
-Le refresh_token OAuth est maintenant enregistré dans D1.
-</p>
-
-<p>
-<a href="/api/status">
-Vérifier le statut
-</a>
-</p>
-`);
-        } catch (e) {
-
-          const message =
-            String(
-              e?.message || e
-            ).replace(
-              /[&<>]/g,
-              c =>
-                ({
-                  "&":
-                    "&amp;",
-                  "<":
-                    "&lt;",
-                  ">":
-                    "&gt;",
-                })[c]
-            );
-
-
-          return page(`
-<h2>
-❌ Connexion MELCloud impossible
-</h2>
-
-<p>
-${message}
-</p>
-
-<p>
-<a href="/setup">
-Réessayer
-</a>
-</p>
-`,
-            400
-          );
-        }
+        return await startOAuth(
+          req
+        );
       }
 
 
-      // ======================================================
-      // SAVE OAUTH
-      // ======================================================
+      // ------------------------------------------------------
+      // CALLBACK
+      // ------------------------------------------------------
+
+      if (
+        req.method === "GET" &&
+        u.pathname ===
+          "/oauth/callback"
+      ) {
+        return await oauthCallback(
+          req,
+          env
+        );
+      }
+
+
+      // ------------------------------------------------------
+      // MANUAL SAVE OAUTH
+      // ------------------------------------------------------
 
       if (
         req.method === "POST" &&
@@ -1910,9 +1567,9 @@ Réessayer
       }
 
 
-      // ======================================================
+      // ------------------------------------------------------
       // GOOGLE HOME
-      // ======================================================
+      // ------------------------------------------------------
 
       if (
         req.method === "POST" &&
@@ -1926,25 +1583,27 @@ Réessayer
       }
 
 
-      // ======================================================
+      // ------------------------------------------------------
       // HEALTH
-      // ======================================================
+      // ------------------------------------------------------
 
       if (
         req.method === "GET" &&
-        u.pathname === "/health"
+        u.pathname ===
+          "/health"
       ) {
         return Response.json({
           status: "ok",
+
           service:
             "melhome-bridge-cloudflare",
         });
       }
 
 
-      // ======================================================
+      // ------------------------------------------------------
       // HOME
-      // ======================================================
+      // ------------------------------------------------------
 
       if (
         req.method === "GET" &&
@@ -1955,35 +1614,43 @@ Réessayer
 
 
         return page(`
-<h1>❄️ MELHome Bridge</h1>
+          <h1>
+            ❄️ MELHome Bridge
+          </h1>
 
-<p>
-Cloudflare opérationnel
-</p>
+          <p>
+            Cloudflare opérationnel.
+          </p>
 
-<p>
-OAuth MELCloud :
-<b>
-${
-  o?.refresh_token
-    ? "CONFIGURE"
-    : "NON CONFIGURE"
-}
-</b>
-</p>
+          <p>
+            OAuth MELCloud :
+            <b>
+              ${
+                o?.refresh_token
+                  ? "CONFIGURE"
+                  : "NON CONFIGURE"
+              }
+            </b>
+          </p>
 
-<p>
-<a href="/setup">
-Configurer MELCloud
-</a>
-</p>
-`);
+          <p>
+            <a href="/setup">
+              Configurer MELCloud
+            </a>
+          </p>
+
+          <p>
+            <a href="/api/status">
+              API Status
+            </a>
+          </p>
+        `);
       }
 
 
-      // ======================================================
-      // 404
-      // ======================================================
+      // ------------------------------------------------------
+      // NOT FOUND
+      // ------------------------------------------------------
 
       return new Response(
         "Not found",
