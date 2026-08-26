@@ -434,7 +434,7 @@ async function refreshToken(env, row) {
 }
 
 /* ============================================================
-   GOOGLE HOME MAPPERS (Depuis votre Node.js)
+   GOOGLE HOME MAPPERS
    ============================================================ */
 
 function getSetting(clim, keys) {
@@ -553,26 +553,61 @@ export default {
       }
 
       /* ============================================================
-         TEST DE L'API MELCLOUD
+         TEST DE L'API MELCLOUD (SCANNER)
          ============================================================ */
       if (request.method === "GET" && url.pathname === "/devices") {
         const token = await getValidAccessToken(env);
         if (!token) return html(`<h1>❌ Non connecté à MELCloud</h1><p><a href="/setup">Se connecter</a></p>`);
         
-        try {
-          const apiResponse = await fetch("https://melcloudhome.com/api/user/context", {
-            headers: { "Authorization": `Bearer ${token}`, "Accept": "application/json" }
-          });
-          const data = await apiResponse.json();
-          const units = data.buildings?.[0]?.airToAirUnits || [];
-          
-          return html(`
-<h1>🌡️ Mes Climatiseurs (JSON)</h1>
-<pre style="background:#e8f5e9;padding:15px;border-radius:4px;overflow:auto;border:1px solid #c8e6c9;">${JSON.stringify(units, null, 2)}</pre>
-<p><a href="/">⬅️ Retour</a></p>`);
-        } catch (err) {
-          return html(`<h1>❌ Erreur API</h1><pre style="background:#ffebee;padding:15px;color:#c62828;">${err.message}</pre>`, 500);
+        // On va tester toutes les adresses probables issues de votre ancien code Node.js
+        const endpoints = [
+          "https://api.melcloudhome.com/api/v1/context", // Ancienne API Node.js
+          "https://melcloudhome.com/api/v1/context",
+          "https://melcloudhome.com/api/context",
+          "https://melcloudhome.com/api/user/context"    // Celle qui donnait du HTML
+        ];
+
+        let results = "<h1>🔍 Recherche du bon endpoint...</h1>";
+        results += "<p>Le script teste actuellement les adresses avec votre Token OAuth pour voir laquelle répond correctement.</p>";
+
+        for (const endpoint of endpoints) {
+          try {
+            const res = await fetch(endpoint, {
+              headers: { 
+                "Authorization": `Bearer ${token}`, 
+                "Accept": "application/json" 
+              },
+              redirect: "manual" // Empêche de suivre la redirection HTML pour voir la vraie erreur
+            });
+
+            const text = await res.text();
+            let isJson = false;
+            let preview = text.substring(0, 300);
+
+            try {
+              JSON.parse(text);
+              isJson = true;
+            } catch (e) {}
+
+            results += `
+            <div style="margin-bottom: 20px; padding: 15px; border-radius: 5px; border: 1px solid #ccc; background: ${res.status === 200 && isJson ? '#e8f5e9' : '#fff'}">
+              <h3 style="margin-top:0">${endpoint}</h3>
+              <p><b>Statut HTTP :</b> ${res.status}</p>
+              <p><b>Format :</b> ${isJson ? "✅ JSON (C'est le bon !)" : "❌ HTML ou Vide"}</p>
+              <pre style="background:#f5f5f5; padding:10px; overflow:auto;">${esc(preview)}</pre>
+            </div>`;
+
+          } catch (err) {
+             results += `
+             <div style="margin-bottom: 20px; padding: 15px; border-radius: 5px; border: 1px solid #ffcdd2; background: #ffebee;">
+              <h3 style="margin-top:0">${endpoint}</h3>
+              <p><b>Erreur réseau :</b> ${err.message}</p>
+            </div>`;
+          }
         }
+
+        results += `<p><a href="/">⬅️ Retour</a></p>`;
+        return html(results);
       }
 
       /* ============================================================
@@ -624,6 +659,7 @@ export default {
         const melToken = await getValidAccessToken(env);
         if (!melToken) return Response.json({ requestId, payload: { errorCode: "authFailure" } });
 
+        // ATTENTION : Cette URL changera probablement en fonction des résultats du test /devices
         const apiResponse = await fetch("https://melcloudhome.com/api/user/context", {
           headers: { "Authorization": `Bearer ${melToken}`, "Accept": "application/json" }
         });
@@ -721,6 +757,7 @@ export default {
                 }
               }
 
+              // ATTENTION : URL d'update qui sera probablement à corriger aussi si l'endpoint de lecture change
               const execRes = await fetch(`https://melcloudhome.com/api/ataunit/${encodeURIComponent(climId)}`, {
                 method: "PUT",
                 headers: { "Content-Type": "application/json", "Authorization": `Bearer ${melToken}` },
