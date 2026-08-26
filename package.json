@@ -1,11 +1,13 @@
 {
-  "name": "melhome-bridge",
+  "name": "melhome-bridge-cloudflare",
   "version": "1.0.0",
-  "main": "index.js",
+  "private": true,
+  "type": "module",
   "scripts": {
-    "start": "node index.js"
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
   },
-  "dependencies": {
-    "express": "^4.18.2"
+  "devDependencies": {
+    "wrangler": "^4.0.0"
   }
 }

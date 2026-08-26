@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "melhome-bridge",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-08-26",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "melhome-bridge",
+      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+    }
+  ]
+}
