@@ -24,11 +24,7 @@ async function saveOAuth(env, t) {
 
 async function refresh(env, row) {
   if (!row?.refresh_token) throw new Error("Aucun refresh_token MELCloud enregistré");
-  const body = new URLSearchParams({
-    grant_type: "refresh_token",
-    client_id: CLIENT_ID,
-    refresh_token: row.refresh_token,
-  });
+  const body = new URLSearchParams({ grant_type: "refresh_token", client_id: CLIENT_ID, refresh_token: row.refresh_token });
   const r = await fetch(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json", "User-Agent": USER_AGENT },
@@ -52,23 +48,13 @@ async function mel(env, path, opt = {}) {
   let t = await token(env);
   let r = await fetch(`${API_BASE}/${path.replace(/^\//, "")}`, {
     ...opt,
-    headers: {
-      Accept: "application/json, text/plain, */*",
-      "User-Agent": USER_AGENT,
-      ...(opt.headers || {}),
-      Authorization: `Bearer ${t}`,
-    },
+    headers: { Accept: "application/json, text/plain, */*", "User-Agent": USER_AGENT, ...(opt.headers || {}), Authorization: `Bearer ${t}` },
   });
   if (r.status === 401) {
     t = await refresh(env, await getOAuth(env));
     r = await fetch(`${API_BASE}/${path.replace(/^\//, "")}`, {
       ...opt,
-      headers: {
-        Accept: "application/json, text/plain, */*",
-        "User-Agent": USER_AGENT,
-        ...(opt.headers || {}),
-        Authorization: `Bearer ${t}`,
-      },
+      headers: { Accept: "application/json, text/plain, */*", "User-Agent": USER_AGENT, ...(opt.headers || {}), Authorization: `Bearer ${t}` },
     });
   }
   return r;
@@ -76,9 +62,7 @@ async function mel(env, path, opt = {}) {
 
 function setCookies(jar, response) {
   let values = [];
-  try {
-    if (typeof response.headers.getSetCookie === "function") values = response.headers.getSetCookie();
-  } catch (_) {}
+  try { if (typeof response.headers.getSetCookie === "function") values = response.headers.getSetCookie(); } catch (_) {}
   if (!values.length) {
     const raw = response.headers.get("set-cookie");
     if (raw) values = raw.split(/,(?=\s*[^;,=\s]+=[^;,]+)/);
@@ -90,9 +74,7 @@ function setCookies(jar, response) {
   }
 }
 
-function cookieHeader(jar) {
-  return [...jar.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
-}
+function cookieHeader(jar) { return [...jar.entries()].map(([k, v]) => `${k}=${v}`).join("; "); }
 
 async function httpWithCookies(url, init = {}, jar = new Map(), maxRedirects = 10) {
   let current = url;
@@ -126,29 +108,55 @@ function extractCsrf(html) {
   return null;
 }
 
+function extractFormAction(html, baseUrl) {
+  const m = html.match(/<form\b[^>]*\baction=["']([^"']+)["'][^>]*>/i) || html.match(/<form\b[^>]*>/i);
+  if (!m) return baseUrl;
+  const action = m[1] || "";
+  try { return new URL(action || baseUrl, baseUrl).toString(); } catch (_) { return baseUrl; }
+}
+
+function extractHiddenInputs(html) {
+  const out = {};
+  const re = /<input\b[^>]*>/gi;
+  for (const tag of html.match(re) || []) {
+    const type = (tag.match(/\btype=["']([^"']+)["']/i)?.[1] || "hidden").toLowerCase();
+    if (type !== "hidden") continue;
+    const name = tag.match(/\bname=["']([^"']+)["']/i)?.[1];
+    if (!name) continue;
+    const value = tag.match(/\bvalue=["']([^"']*)["']/i)?.[1] ?? "";
+    out[name] = value;
+  }
+  return out;
+}
+
 function extractCode(value) {
-  const text = String(value || "");
-  const m = text.match(/[?&]code=([^&\s"'<>]+)/i);
-  return m ? decodeURIComponent(m[1]) : null;
+  const text = String(value || "").replace(/&amp;/gi, "&").replace(/\\u0026/g, "&");
+  const direct = text.match(/[?&]code=([^&\s"'<>#]+)/i);
+  if (direct) { try { return decodeURIComponent(direct[1]); } catch (_) { return direct[1]; } }
+  const encoded = text.match(/(?:code%3D|code\\u003d)([^&%\s"'<>#]+)/i);
+  if (encoded) { try { return decodeURIComponent(encoded[1]); } catch (_) { return encoded[1]; } }
+  return null;
+}
+
+function extractOAuthError(value) {
+  const text = String(value || "").replace(/&amp;/gi, "&");
+  const m = text.match(/[?&]error=([^&\s"'<>#]+)/i);
+  if (!m) return null;
+  let err = m[1];
+  try { err = decodeURIComponent(err); } catch (_) {}
+  const d = text.match(/[?&]error_description=([^&\s"'<>#]+)/i);
+  if (d) { try { return `${err}: ${decodeURIComponent(d[1])}`; } catch (_) {} }
+  return err;
 }
 
 async function loginToMelcloud(email, password) {
   const jar = new Map();
-  const verifierBytes = crypto.getRandomValues(new Uint8Array(32));
-  const verifier = b64url(verifierBytes);
+  const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
   const challenge = b64url(new Uint8Array(digest));
   const state = b64url(crypto.getRandomValues(new Uint8Array(16)));
 
-  const parBody = new URLSearchParams({
-    response_type: "code",
-    state,
-    code_challenge: challenge,
-    code_challenge_method: "S256",
-    client_id: CLIENT_ID,
-    scope: SCOPES,
-    redirect_uri: REDIRECT_URI,
-  });
+  const parBody = new URLSearchParams({ response_type: "code", state, code_challenge: challenge, code_challenge_method: "S256", client_id: CLIENT_ID, scope: SCOPES, redirect_uri: REDIRECT_URI });
   const par = await fetch(PAR_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json", "User-Agent": USER_AGENT },
@@ -161,61 +169,71 @@ async function loginToMelcloud(email, password) {
   const authorize = `${AUTHORIZE_URL}?client_id=${encodeURIComponent(CLIENT_ID)}&request_uri=${encodeURIComponent(parData.request_uri)}`;
   const first = await httpWithCookies(authorize, { method: "GET", headers: { "User-Agent": USER_AGENT, Accept: "text/html,application/xhtml+xml" } }, jar);
   let authCode = extractCode(first.url);
+  if (authCode) return await exchangeCode(authCode, verifier);
 
-  let loginUrl = null;
-  if (!authCode) {
-    const finalHost = (() => { try { return new URL(first.url).hostname || ""; } catch (_) { return ""; } })();
-    const body = await first.response.text();
-    if (finalHost.endsWith(COGNITO_SUFFIX) && /\/login/i.test(first.url)) {
-      loginUrl = first.url;
-      const csrf = extractCsrf(body);
-      if (!csrf) throw new Error("Impossible de récupérer le jeton CSRF MELCloud");
-      const form = new URLSearchParams({ _csrf: csrf, username: email, password, cognitoAsfData: "" });
-      const logged = await httpWithCookies(loginUrl, {
-        method: "POST",
-        headers: {
-          "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/22F76",
-          "Content-Type": "application/x-www-form-urlencoded",
-          Origin: `https://${finalHost}`,
-          Referer: loginUrl,
-          Accept: "text/html,application/xhtml+xml",
-        },
-        body: form.toString(),
-      }, jar);
-      authCode = extractCode(logged.url);
-      if (!authCode) {
-        const loggedBody = await logged.response.text();
-        authCode = extractCode(loggedBody);
-        if (!authCode) {
-          const cb = loggedBody.match(/\/connect\/authorize\/callback\?([^"'\s<>]+)/i);
-          if (cb) {
-            const callback = `${AUTH_BASE}/connect/authorize/callback?${cb[1]}`;
-            const callbackResult = await httpWithCookies(callback, { method: "GET", headers: { "User-Agent": USER_AGENT, Accept: "text/html,application/xhtml+xml" } }, jar);
-            authCode = extractCode(callbackResult.url) || extractCode(await callbackResult.response.text());
-          }
-        }
-      }
-    } else {
-      authCode = extractCode(body);
-      if (!authCode) {
-        const cb = body.match(/\/connect\/authorize\/callback\?([^"'\s<>]+)/i);
-        if (cb) {
-          const callbackResult = await httpWithCookies(`${AUTH_BASE}/connect/authorize/callback?${cb[1]}`, { method: "GET", headers: { "User-Agent": USER_AGENT, Accept: "text/html,application/xhtml+xml" } }, jar);
-          authCode = extractCode(callbackResult.url) || extractCode(await callbackResult.response.text());
-        }
-      }
+  const finalHost = (() => { try { return new URL(first.url).hostname || ""; } catch (_) { return ""; } })();
+  const body = await first.response.text();
+  const firstError = extractOAuthError(first.url) || extractOAuthError(body);
+  if (firstError) throw new Error(`MELCloud OAuth: ${firstError}`);
+
+  if (finalHost.endsWith(COGNITO_SUFFIX) && /\/login/i.test(first.url)) {
+    const csrf = extractCsrf(body);
+    if (!csrf) throw new Error("Impossible de récupérer le jeton CSRF MELCloud");
+    const action = extractFormAction(body, first.url);
+    const hidden = extractHiddenInputs(body);
+    hidden._csrf = csrf;
+    hidden.username = email;
+    hidden.password = password;
+    if (!Object.prototype.hasOwnProperty.call(hidden, "cognitoAsfData")) hidden.cognitoAsfData = "";
+    const form = new URLSearchParams();
+    for (const [k, v] of Object.entries(hidden)) form.set(k, String(v));
+
+    const logged = await httpWithCookies(action, {
+      method: "POST",
+      headers: {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/22F76",
+        "Content-Type": "application/x-www-form-urlencoded",
+        Origin: `https://${finalHost}`,
+        Referer: first.url,
+        Accept: "text/html,application/xhtml+xml",
+      },
+      body: form.toString(),
+    }, jar);
+
+    authCode = extractCode(logged.url);
+    if (authCode) return await exchangeCode(authCode, verifier);
+    const loggedBody = await logged.response.text();
+    authCode = extractCode(loggedBody);
+    if (authCode) return await exchangeCode(authCode, verifier);
+    const err = extractOAuthError(logged.url) || extractOAuthError(loggedBody);
+    if (err) throw new Error(`MELCloud OAuth après connexion: ${err}`);
+
+    const callbackMatches = [
+      logged.url,
+      ...Array.from(loggedBody.matchAll(/(?:href|action|location)=["']([^"']*\/connect\/authorize\/callback\?[^"']*)["']/gi)).map(m => m[1]),
+      ...Array.from(loggedBody.matchAll(/(\/connect\/authorize\/callback\?[^"'\s<>]+)/gi)).map(m => m[1]),
+    ];
+    for (const candidate of callbackMatches) {
+      try {
+        const callbackUrl = new URL(candidate, logged.url).toString();
+        const callbackResult = await httpWithCookies(callbackUrl, { method: "GET", headers: { "User-Agent": USER_AGENT, Accept: "text/html,application/xhtml+xml" } }, jar);
+        authCode = extractCode(callbackResult.url) || extractCode(await callbackResult.response.text());
+        if (authCode) return await exchangeCode(authCode, verifier);
+      } catch (_) {}
     }
+
+    const formActionCode = extractCode(action);
+    if (formActionCode) return await exchangeCode(formActionCode, verifier);
+    throw new Error(`Connexion MELCloud refusée ou redirection OAuth introuvable (réponse HTTP ${logged.response.status})`);
   }
 
-  if (!authCode) throw new Error("MELCloud n'a pas renvoyé de code OAuth. Vérifie l'e-mail et le mot de passe.");
+  authCode = extractCode(body);
+  if (authCode) return await exchangeCode(authCode, verifier);
+  throw new Error(`MELCloud n'a pas renvoyé de code OAuth (étape ${finalHost || "inconnue"}, HTTP ${first.response.status})`);
+}
 
-  const tokenBody = new URLSearchParams({
-    grant_type: "authorization_code",
-    code: authCode,
-    redirect_uri: REDIRECT_URI,
-    code_verifier: verifier,
-    client_id: CLIENT_ID,
-  });
+async function exchangeCode(authCode, verifier) {
+  const tokenBody = new URLSearchParams({ grant_type: "authorization_code", code: authCode, redirect_uri: REDIRECT_URI, code_verifier: verifier, client_id: CLIENT_ID });
   const tokenResponse = await fetch(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json", "User-Agent": USER_AGENT },
