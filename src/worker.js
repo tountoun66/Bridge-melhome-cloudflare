@@ -237,7 +237,6 @@ function extractForm(body, baseUrl) {
     return null;
   }
 
-  // Nettoyage des entités HTML dans l'attribut action
   const rawAction = match[1].replace(/&amp;/g, "&");
 
   const action = new URL(
@@ -381,7 +380,6 @@ async function followOAuth(
           currentUrl
         ).toString();
 
-      /* 💡 CORRECTION : Détection de 'melcloudhome://' */
       if (
         /^melcloud(?:home)?:\/\//i.test(nextUrl)
       ) {
@@ -419,7 +417,6 @@ async function followOAuth(
       };
     }
 
-    /* 💡 CORRECTION : Gestion de la page JavaScript /Redirect de MELCloud */
     try {
       const parsedUrl = new URL(currentUrl);
       if (parsedUrl.pathname.toLowerCase() === "/redirect") {
@@ -438,7 +435,6 @@ async function followOAuth(
       }
     } catch {}
 
-    /* 💡 CORRECTION : Au cas où, on check les meta-refresh de secours */
     const metaMatch = body.match(/content=["'][0-9]+;\s*url=["']?([^"'>]+)["']?/i);
     if (metaMatch) {
       const rawNext = metaMatch[1].replace(/&amp;/g, "&");
@@ -460,7 +456,6 @@ async function followOAuth(
       );
 
     if (form) {
-      // On stoppe l'auto-soumission si on est sur Cognito.
       if (currentUrl.includes("amazoncognito.com")) {
         return {
           url: currentUrl,
@@ -956,23 +951,16 @@ Token MELCloud :
 <b>
 ${
   oauth?.refresh_token
-    ? "ENREGISTRÉ"
-    : "ABSENT"
+    ? "✅ ENREGISTRÉ"
+    : "❌ ABSENT"
 }
 </b>
 </p>
 
-<p>
-<a href="/setup">
-🔐 Connexion MELCloud
-</a>
-</p>
-
-<p>
-<a href="/api/status">
-📊 État OAuth
-</a>
-</p>
+<div style="display:flex;gap:15px;margin-top:20px;">
+  <a href="/setup" style="padding:10px 15px;background:#eee;text-decoration:none;border-radius:5px;color:black;">🔐 Connexion</a>
+  <a href="/devices" style="padding:10px 15px;background:#005cff;text-decoration:none;border-radius:5px;color:white;font-weight:bold;">🌡️ Voir mes clims</a>
+</div>
 `);
       }
 
@@ -1126,8 +1114,8 @@ Le refresh_token est enregistré dans D1.
 </p>
 
 <p>
-<a href="/api/status">
-Vérifier le statut
+<a href="/devices">
+🌡️ Tester la connexion aux clims
 </a>
 </p>
 `);
@@ -1201,8 +1189,154 @@ Réessayer
         });
       }
 
-      /* DEBUG BFF */
+      /* TEST API (UI) */
+      if (
+        request.method === "GET" &&
+        url.pathname === "/devices"
+      ) {
+        const oauth = await getOAuth(env);
 
+        if (!oauth?.refresh_token) {
+          return html(`
+<h1>❌ Non connecté</h1>
+<p>Veuillez vous <a href="/setup">connecter d'abord</a> pour récupérer vos équipements.</p>
+`);
+        }
+
+        return html(`
+<h1>🌡️ Mes Climatiseurs</h1>
+
+<p>
+Vérifions que nous pouvons bien lire vos appareils MELCloud Home avant de configurer Google Home.
+</p>
+
+<form id="apiForm" onsubmit="testApi(event)" style="background:#f9f9f9;padding:20px;border-radius:8px;">
+  <label style="display:block;margin-bottom:8px;font-weight:600;">
+    URL de l'API MELCloud :
+  </label>
+  <input 
+    id="apiUrl"
+    type="text" 
+    value="https://api.melcloudhome.com/v1/devices" 
+    style="width:100%;padding:10px;margin-bottom:15px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box;">
+  
+  <p style="font-size:13px;color:#666;margin-top:-5px;margin-bottom:15px;">
+    <i>Note : Les URL de l'API peuvent varier. Si celle par défaut échoue avec une erreur 404, essayez :<br>
+    - https://api.melcloudhome.com/devices<br>
+    - https://melcloudhome.com/api/devices</i>
+  </p>
+
+  <button type="submit" id="submitBtn" style="background:#005cff;color:white;border:none;padding:12px 20px;border-radius:4px;font-size:16px;cursor:pointer;">
+    🔍 Interroger l'API
+  </button>
+</form>
+
+<div id="result" style="margin-top:25px;"></div>
+
+<script>
+async function testApi(e) {
+  e.preventDefault();
+  const btn = document.getElementById('submitBtn');
+  const res = document.getElementById('result');
+  const apiUrl = document.getElementById('apiUrl').value;
+  
+  btn.disabled = true;
+  btn.innerText = "Interrogation en cours...";
+  res.innerHTML = "<i>Recherche de vos climatisations...</i>";
+  
+  try {
+    const response = await fetch('/api/test-endpoint', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: apiUrl })
+    });
+    
+    const data = await response.json();
+    
+    if (data.ok) {
+       res.innerHTML = "<h3>✅ Équipements trouvés :</h3><pre style='background:#e8f5e9;padding:15px;border-radius:4px;overflow:auto;max-height:600px;border:1px solid #c8e6c9;'>" + JSON.stringify(data.data, null, 2) + "</pre>";
+    } else {
+       res.innerHTML = "<h3>❌ Erreur de l'API :</h3><pre style='background:#ffebee;padding:15px;color:#c62828;border-radius:4px;overflow:auto;border:1px solid #ffcdd2;'>" + data.error + "</pre>";
+    }
+  } catch (err) {
+    res.innerHTML = "<h3>❌ Erreur locale :</h3><pre style='background:#ffebee;padding:15px;color:#c62828;border-radius:4px;'>" + err.message + "</pre>";
+  } finally {
+    btn.disabled = false;
+    btn.innerText = "🔍 Interroger l'API";
+  }
+}
+</script>
+
+<p style="margin-top:30px;">
+<a href="/">⬅️ Retour à l'accueil</a>
+</p>
+`);
+      }
+
+      /* TEST API (BACKEND) */
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/test-endpoint"
+      ) {
+        try {
+          const body = await request.json();
+          const targetUrl = body.url;
+          
+          if (!targetUrl) {
+            throw new Error("URL manquante");
+          }
+
+          let oauth = await getOAuth(env);
+          
+          if (!oauth?.access_token) {
+            throw new Error("Aucun access_token disponible en base. Veuillez vous reconnecter.");
+          }
+
+          // Rafraîchissement automatique si le token expire dans moins de 5 minutes
+          const now = Date.now();
+          if (oauth.expires_at && oauth.expires_at < now + 300000) {
+            oauth = await refreshToken(env, oauth);
+          }
+
+          const apiResponse = await fetch(targetUrl, {
+            method: "GET",
+            headers: {
+              "Authorization": `Bearer ${oauth.access_token}`,
+              "Accept": "application/json",
+              "User-Agent": USER_AGENT
+            }
+          });
+
+          const responseText = await apiResponse.text();
+          let responseData;
+          
+          try {
+             responseData = JSON.parse(responseText);
+          } catch(e) {
+             responseData = responseText;
+          }
+
+          if (!apiResponse.ok) {
+            return Response.json({ 
+              ok: false, 
+              error: `Erreur HTTP ${apiResponse.status}\n\n${responseText}` 
+            });
+          }
+
+          return Response.json({ 
+            ok: true, 
+            data: responseData 
+          });
+
+        } catch (error) {
+          return Response.json({ 
+            ok: false, 
+            error: error?.message || String(error) 
+          });
+        }
+      }
+
+      /* DEBUG BFF */
       if (
         request.method === "GET" &&
         url.pathname ===
