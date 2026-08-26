@@ -237,8 +237,11 @@ function extractForm(body, baseUrl) {
     return null;
   }
 
+  // 💡 CORRECTION 1 : Nettoyage des entités HTML dans l'attribut action
+  const rawAction = match[1].replace(/&amp;/g, "&");
+
   const action = new URL(
-    match[1],
+    rawAction,
     baseUrl
   ).toString();
 
@@ -422,6 +425,15 @@ async function followOAuth(
       );
 
     if (form) {
+      // 💡 CORRECTION 2 : On stoppe l'auto-soumission si on est sur Cognito.
+      if (currentUrl.includes("amazoncognito.com")) {
+        return {
+          url: currentUrl,
+          response,
+          body
+        };
+      }
+
       currentUrl = form.action;
 
       init = {
