@@ -415,7 +415,11 @@ export default {
           const climId = u.id ?? u.ID;
           htmlList += `<li style="background:#f5f5f5;margin-bottom:10px;padding:15px;border-radius:5px;">
             <b style="font-size:18px;">${esc(u.givenDisplayName)}</b> - ${isPoweredOn(u) ? "✅ Allumé" : "💤 Éteint"}<br>
-            <span style="color:#555">Mode : ${getGoogleMode(u)} | Consigne : ${getTemp(u)}°C | Pièce : ${getRoomTemp(u)}°C | Vent : ${getGoogleFanSpeed(u)}</span><br><br>
+            <span style="color:#555">Mode : ${getGoogleMode(u)} | Consigne : ${getTemp(u)}°C | Pièce : ${getRoomTemp(u)}°C | Vent : ${getGoogleFanSpeed(u)}</span><br>
+            
+            <details style="margin-top:10px;"><summary style="cursor:pointer;font-size:12px;color:#005cff;">🔍 Voir le JSON brut de cette clim</summary>
+            <pre style="background:#fff;padding:10px;font-size:11px;overflow:auto;max-height:150px;">${esc(JSON.stringify(u, null, 2))}</pre>
+            </details><br>
             
             <button id="btn-on-${climId}" onclick="sendCmd('${climId}', true)" style="padding:8px 12px;background:#4CAF50;color:white;border:none;border-radius:4px;cursor:pointer;margin-right:10px;">🟢 Allumer</button>
             <button id="btn-off-${climId}" onclick="sendCmd('${climId}', false)" style="padding:8px 12px;background:#F44336;color:white;border:none;border-radius:4px;cursor:pointer;">🔴 Éteindre</button>
