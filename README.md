@@ -1,5 +1,3 @@
-Here is the complete translated guide, perfectly formatted for a GitHub README.md file. You can copy and paste this directly into your repository!
-
 ❄️ MELCloud Home to Google Home Bridge (via Cloudflare)
 This project allows you to connect your Mitsubishi air conditioners (using the new MELCloud Home app) to Google Home. It relies on a free Cloudflare Worker to act as a seamless bridge between Mitsubishi's undocumented mobile API and Google's Smart Home servers, keeping your connection alive autonomously.
 
