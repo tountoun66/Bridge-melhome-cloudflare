@@ -41,6 +41,43 @@ function b64url(bytes) {
 }
 
 /* ============================================================
+   SÉCURITÉ BASIC AUTH (VÉRIFICATION VIA LA BDD D1)
+   ============================================================ */
+
+async function checkBasicAuth(request, env) {
+  const authHeader = request.headers.get("Authorization");
+  if (!authHeader) return false;
+  const match = authHeader.match(/^Basic\s+(.*)$/);
+  if (!match) return false;
+
+  try {
+    const credentials = atob(match[1]);
+    const [user, pass] = credentials.split(":");
+
+    // Récupération des identifiants depuis la table app_config de D1
+    const dbUser = await env.DB.prepare("SELECT value FROM app_config WHERE key = 'admin_user'").first();
+    const dbPass = await env.DB.prepare("SELECT value FROM app_config WHERE key = 'admin_pass'").first();
+
+    const validUser = dbUser ? dbUser.value : "admin";
+    const validPass = dbPass ? dbPass.value : "admin";
+
+    return user === validUser && pass === validPass;
+  } catch {
+    return false;
+  }
+}
+
+function unauthorizedResponse() {
+  return new Response("🔒 Accès restreint. Veuillez vous identifier.", {
+    status: 401,
+    headers: {
+      "WWW-Authenticate": 'Basic realm="Zone d\'Administration MELHome"',
+      "Content-Type": "text/plain;charset=utf-8"
+    }
+  });
+}
+
+/* ============================================================
    D1 (BASE DE DONNÉES)
    ============================================================ */
 
@@ -239,7 +276,7 @@ async function refreshToken(env, row) {
 }
 
 /* ============================================================
-   MAPPERS DES ÉTATS
+   MAPPERS DES ÉTATS (LECTURE)
    ============================================================ */
 
 function getSetting(clim, keys) {
@@ -304,6 +341,14 @@ function getGoogleFanSpeed(clim) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    // 🔒 PROTECTION DES PAGES D'ADMINISTRATION VIA LA BASE DE DONNÉES D1
+    const adminRoutes = ["/", "/setup", "/devices", "/api/test-command"];
+    if (adminRoutes.includes(url.pathname)) {
+      if (!(await checkBasicAuth(request, env))) {
+        return unauthorizedResponse();
+      }
+    }
 
     try {
       /* --- ACCUEIL --- */
@@ -380,14 +425,14 @@ export default {
             const res = await fetch('/api/test-command', {
               method: 'POST',
               headers: {'Content-Type':'application/json'},
-              body: JSON.stringify({ id, payload: { power, operationMode: 'Cool', setTemperature: 25, setFanSpeed: 'Auto', vaneVerticalDirection: 'Auto', vaneHorizontalDirection: 'Centre', temperatureIncrementOverride: null, inStandbyMode: null } })
+              body: JSON.stringify({ id, payload: { power, inStandbyMode: false } })
             });
             const data = await res.json();
             
             if(data.ok) {
-               alert("✅ Succès ! La commande a été validée.");
+               alert("✅ Succès !");
             } else {
-               alert("❌ Erreur " + data.status + "\\n\\nRéponse : " + data.response);
+               alert("❌ Erreur " + data.status);
             }
           } catch(e) {
             alert("Erreur locale : " + e.message);
@@ -405,10 +450,7 @@ export default {
         if (!token) return Response.json({ ok: false, status: 401, response: "Non connecté" });
         
         const body = await request.json();
-        const climId = encodeURIComponent(body.id);
-        
-        // 💡 UTILISATION DE LA BONNE URL POUR L'ÉCRITURE
-        const urlToCall = `${API_BASE}/monitor/ataunit/${climId}`;
+        const urlToCall = `${API_BASE}/monitor/ataunit/${encodeURIComponent(body.id)}`;
         
         const res = await fetch(urlToCall, {
           method: "PUT",
@@ -460,7 +502,6 @@ export default {
         const melToken = await getValidAccessToken(env);
         if (!melToken) return Response.json({ requestId, payload: { errorCode: "authFailure" } });
 
-        // LECTURE
         const apiResponse = await fetch(`${API_BASE}/context`, {
           headers: { "Authorization": `Bearer ${melToken}`, "Accept": "application/json", "User-Agent": USER_AGENT }
         });
@@ -520,7 +561,6 @@ export default {
               const currentDeviceData = clims.find(c => String(c.id ?? c.ID) === climId);
               if (!currentDeviceData) continue;
 
-              // On construit le payload complet avec les valeurs actuelles par défaut
               let payloadJson = {
                 power: isPoweredOn(currentDeviceData),
                 operationMode: getSetting(currentDeviceData, ['operationMode', 'OperationMode']) || "Cool",
@@ -537,7 +577,6 @@ export default {
                 thermostatTemperatureSetpoint: getTemp(currentDeviceData), currentFanSpeedSetting: getGoogleFanSpeed(currentDeviceData)
               };
 
-              // Application des modifications demandées par Google Home
               for (const exec of command.execution || []) {
                 if (exec.command === "action.devices.commands.OnOff") {
                   payloadJson.power = Boolean(exec.params?.on);
@@ -566,7 +605,8 @@ export default {
                 }
               }
 
-              // 💡 UTILISATION DE LA BONNE URL POUR L'ÉCRITURE
+              payloadJson = Object.fromEntries(Object.entries(payloadJson).filter(([_, v]) => v !== null));
+
               const execRes = await fetch(`${API_BASE}/monitor/ataunit/${encodeURIComponent(climId)}`, {
                 method: "PUT",
                 headers: { "Content-Type": "application/json", "Accept": "application/json", "Authorization": `Bearer ${melToken}`, "User-Agent": USER_AGENT },
