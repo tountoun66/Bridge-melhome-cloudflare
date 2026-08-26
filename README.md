@@ -189,13 +189,13 @@ You can use this page to verify that the bridge is communicating correctly with 
 
 ---
 
-# 🏠 Step 5 — Configure the Google Home Action
+# 🏠 Step 5 — Configure the Google Home Console
 
 Google Home needs to know where your bridge is located.
 
 ## 1. Create a Google project
 
-Open the **Google Actions Console** and sign in with the same Google account you use with Google Home.
+Open the **Google home Console** and sign in with the same Google account you use with Google Home.
 
 Create a new project.
 
@@ -209,7 +209,7 @@ Select your language and country, then click **Create project**.
 
 ---
 
-## 2. Enable Smart Home
+## 2. Enable cloud to cloud 
 
 Inside your project, select:
 
