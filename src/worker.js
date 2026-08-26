@@ -2,6 +2,7 @@ const AUTH_BASE = "https://auth.melcloudhome.com";
 const TOKEN_URL = `${AUTH_BASE}/connect/token`;
 const PAR_URL = `${AUTH_BASE}/connect/par`;
 const AUTHORIZE_URL = `${AUTH_BASE}/connect/authorize`;
+
 const API_BASE = "https://mobile.bff.melcloudhome.com";
 
 const CLIENT_ID = "homemobile";
@@ -13,9 +14,10 @@ const USER_AGENT =
 
 const COGNITO_SUFFIX = ".amazoncognito.com";
 
-/* =========================================================
-   D1 / OAuth
-========================================================= */
+
+// ============================================================
+// D1 - OAUTH
+// ============================================================
 
 async function getOAuth(env) {
   return env.DB
@@ -25,23 +27,27 @@ async function getOAuth(env) {
     .first();
 }
 
+
 async function saveOAuth(env, t) {
   if (!t?.refresh_token) {
     throw new Error("MELCloud n'a pas fourni de refresh_token");
   }
 
   const now = Date.now();
+
   const expires =
     t.expires_at ||
     now + Number(t.expires_in || 3600) * 1000;
 
-  await env.DB.prepare("DELETE FROM oauth_tokens").run();
+  await env.DB
+    .prepare("DELETE FROM oauth_tokens")
+    .run();
 
   await env.DB
     .prepare(
       `INSERT INTO oauth_tokens
-       (id,access_token,refresh_token,expires_at,created_at,updated_at)
-       VALUES(?,?,?,?,?,?)`
+      (id,access_token,refresh_token,expires_at,created_at,updated_at)
+      VALUES(?,?,?,?,?,?)`
     )
     .bind(
       crypto.randomUUID(),
@@ -54,9 +60,10 @@ async function saveOAuth(env, t) {
     .run();
 }
 
-/* =========================================================
-   Refresh token
-========================================================= */
+
+// ============================================================
+// REFRESH TOKEN
+// ============================================================
 
 async function refresh(env, row) {
   if (!row?.refresh_token) {
@@ -71,16 +78,22 @@ async function refresh(env, row) {
 
   const r = await fetch(TOKEN_URL, {
     method: "POST",
+
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
       Accept: "application/json",
       "User-Agent": USER_AGENT,
     },
+
     body: body.toString(),
   });
 
   if (!r.ok) {
-    throw new Error(`MELCloud OAuth refresh HTTP ${r.status}`);
+    const detail = await r.text();
+
+    throw new Error(
+      `MELCloud OAuth refresh HTTP ${r.status}: ${detail.slice(0, 500)}`
+    );
   }
 
   const t = await r.json();
@@ -93,6 +106,11 @@ async function refresh(env, row) {
 
   return t.access_token;
 }
+
+
+// ============================================================
+// ACCESS TOKEN
+// ============================================================
 
 async function token(env) {
   const row = await getOAuth(env);
@@ -111,9 +129,10 @@ async function token(env) {
   return refresh(env, row);
 }
 
-/* =========================================================
-   MELCloud API
-========================================================= */
+
+// ============================================================
+// MELCLOUD API
+// ============================================================
 
 async function mel(env, path, opt = {}) {
   let t = await token(env);
@@ -122,6 +141,7 @@ async function mel(env, path, opt = {}) {
     `${API_BASE}/${path.replace(/^\//, "")}`,
     {
       ...opt,
+
       headers: {
         Accept: "application/json, text/plain, */*",
         "User-Agent": USER_AGENT,
@@ -132,12 +152,16 @@ async function mel(env, path, opt = {}) {
   );
 
   if (r.status === 401) {
-    t = await refresh(env, await getOAuth(env));
+    t = await refresh(
+      env,
+      await getOAuth(env)
+    );
 
     r = await fetch(
       `${API_BASE}/${path.replace(/^\//, "")}`,
       {
         ...opt,
+
         headers: {
           Accept: "application/json, text/plain, */*",
           "User-Agent": USER_AGENT,
@@ -151,21 +175,27 @@ async function mel(env, path, opt = {}) {
   return r;
 }
 
-/* =========================================================
-   Cookies
-========================================================= */
+
+// ============================================================
+// COOKIES
+// ============================================================
 
 function setCookies(jar, response) {
   let values = [];
 
   try {
-    if (typeof response.headers.getSetCookie === "function") {
-      values = response.headers.getSetCookie();
+    if (
+      typeof response.headers.getSetCookie ===
+      "function"
+    ) {
+      values =
+        response.headers.getSetCookie();
     }
   } catch (_) {}
 
   if (!values.length) {
-    const raw = response.headers.get("set-cookie");
+    const raw =
+      response.headers.get("set-cookie");
 
     if (raw) {
       values = raw.split(
@@ -175,7 +205,9 @@ function setCookies(jar, response) {
   }
 
   for (const value of values) {
-    const pair = value.split(";", 1)[0];
+    const pair =
+      value.split(";", 1)[0];
+
     const i = pair.indexOf("=");
 
     if (i > 0) {
@@ -187,21 +219,23 @@ function setCookies(jar, response) {
   }
 }
 
+
 function cookieHeader(jar) {
   return [...jar.entries()]
     .map(([k, v]) => `${k}=${v}`)
     .join("; ");
 }
 
-/* =========================================================
-   HTTP avec cookies + redirections
-========================================================= */
+
+// ============================================================
+// HTTP AVEC COOKIES + REDIRECTIONS
+// ============================================================
 
 async function httpWithCookies(
   url,
   init = {},
   jar = new Map(),
-  maxRedirects = 15
+  maxRedirects = 10
 ) {
   let current = url;
 
@@ -211,9 +245,8 @@ async function httpWithCookies(
   };
 
   for (let i = 0; i <= maxRedirects; i++) {
-    const headers = new Headers(
-      options.headers || {}
-    );
+    const headers =
+      new Headers(options.headers || {});
 
     const cookies = cookieHeader(jar);
 
@@ -221,52 +254,55 @@ async function httpWithCookies(
       headers.set("Cookie", cookies);
     }
 
-    const response = await fetch(current, {
-      ...options,
-      headers,
-      redirect: "manual",
-    });
+    const response = await fetch(
+      current,
+      {
+        ...options,
+        headers,
+        redirect: "manual",
+      }
+    );
 
     setCookies(jar, response);
 
-    const location =
-      response.headers.get("location");
-
-    /* OAuth custom scheme */
-    if (
-      location &&
-      /^melcloudhome:\/\//i.test(
-        new URL(location, current).toString()
-      )
-    ) {
-      return {
-        response,
-        url: new URL(location, current).toString(),
-      };
-    }
-
-    /* HTTP redirect */
     if (
       response.status >= 300 &&
-      response.status < 400 &&
-      location
+      response.status < 400
     ) {
+      const location =
+        response.headers.get("location");
+
+      if (!location) {
+        return {
+          response,
+          url: current,
+        };
+      }
+
       const next =
-        new URL(location, current).toString();
+        new URL(
+          location,
+          current
+        ).toString();
+
+      if (
+        /^melcloudhome:\/\//i.test(next)
+      ) {
+        return {
+          response,
+          url: next,
+        };
+      }
 
       current = next;
 
-      /*
-       * Après un POST Cognito, les redirections suivantes
-       * doivent généralement être GET.
-       */
       options = {
         method: "GET",
+
         headers: {
           "User-Agent": USER_AGENT,
           Accept:
-            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          Referer: current,
+            "text/html,application/xhtml+xml",
         },
       };
 
@@ -284,9 +320,10 @@ async function httpWithCookies(
   );
 }
 
-/* =========================================================
-   HTML helpers
-========================================================= */
+
+// ============================================================
+// HTML HELPERS
+// ============================================================
 
 function extractCsrf(html) {
   const patterns = [
@@ -305,28 +342,60 @@ function extractCsrf(html) {
   return null;
 }
 
+
+function extractFormAction(html, baseUrl) {
+  const m =
+    html.match(
+      /<form\b[^>]*\baction=["']([^"']+)["'][^>]*>/i
+    ) ||
+    html.match(/<form\b[^>]*>/i);
+
+  if (!m) {
+    return baseUrl;
+  }
+
+  const action = m[1] || "";
+
+  try {
+    return new URL(
+      action || baseUrl,
+      baseUrl
+    ).toString();
+  } catch (_) {
+    return baseUrl;
+  }
+}
+
+
 function extractHiddenInputs(html) {
   const out = {};
 
-  const tags =
-    html.match(/<input\b[^>]*>/gi) || [];
+  const re =
+    /<input\b[^>]*>/gi;
 
-  for (const tag of tags) {
+  for (
+    const tag of html.match(re) || []
+  ) {
     const type =
       (
         tag.match(
           /\btype=["']([^"']+)["']/i
-        )?.[1] || "hidden"
+        )?.[1] ||
+        "hidden"
       ).toLowerCase();
 
-    if (type !== "hidden") continue;
+    if (type !== "hidden") {
+      continue;
+    }
 
     const name =
       tag.match(
         /\bname=["']([^"']+)["']/i
       )?.[1];
 
-    if (!name) continue;
+    if (!name) {
+      continue;
+    }
 
     const value =
       tag.match(
@@ -339,40 +408,41 @@ function extractHiddenInputs(html) {
   return out;
 }
 
+
+// ============================================================
+// OAUTH CODE
+// ============================================================
+
 function extractCode(value) {
   const text = String(value || "")
     .replace(/&amp;/gi, "&")
     .replace(/\\u0026/g, "&");
 
-  try {
-    const u = new URL(text);
-
-    const code = u.searchParams.get("code");
-
-    if (code) {
-      return code;
-    }
-  } catch (_) {}
-
-  const direct = text.match(
-    /[?&#]code=([^&\s"'<>#]+)/i
-  );
+  const direct =
+    text.match(
+      /[?&]code=([^&\s"'<>#]+)/i
+    );
 
   if (direct) {
     try {
-      return decodeURIComponent(direct[1]);
+      return decodeURIComponent(
+        direct[1]
+      );
     } catch (_) {
       return direct[1];
     }
   }
 
-  const encoded = text.match(
-    /(?:code%3D|code\\u003d)([^&%\s"'<>#]+)/i
-  );
+  const encoded =
+    text.match(
+      /(?:code%3D|code\\u003d)([^&%\s"'<>#]+)/i
+    );
 
   if (encoded) {
     try {
-      return decodeURIComponent(encoded[1]);
+      return decodeURIComponent(
+        encoded[1]
+      );
     } catch (_) {
       return encoded[1];
     }
@@ -381,146 +451,46 @@ function extractCode(value) {
   return null;
 }
 
+
 function extractOAuthError(value) {
   const text = String(value || "")
     .replace(/&amp;/gi, "&");
 
-  try {
-    const u = new URL(text);
+  const m =
+    text.match(
+      /[?&]error=([^&\s"'<>#]+)/i
+    );
 
-    const error =
-      u.searchParams.get("error");
-
-    if (error) {
-      const description =
-        u.searchParams.get(
-          "error_description"
-        );
-
-      return description
-        ? `${error}: ${description}`
-        : error;
-    }
-  } catch (_) {}
-
-  const m = text.match(
-    /[?&]error=([^&\s"'<>#]+)/i
-  );
-
-  if (!m) return null;
-
-  let error = m[1];
-
-  try {
-    error = decodeURIComponent(error);
-  } catch (_) {}
-
-  return error;
-}
-
-function extractMetaRefresh(html, baseUrl) {
-  const m = String(html || "").match(
-    /<meta[^>]+http-equiv=["']refresh["'][^>]+content=["'][^"']*url\s*=\s*([^"']+)["']/i
-  );
-
-  if (!m) return null;
-
-  try {
-    return new URL(
-      m[1].trim(),
-      baseUrl
-    ).toString();
-  } catch (_) {
+  if (!m) {
     return null;
   }
-}
 
-function extractCallbackUrls(html, baseUrl) {
-  const out = [];
+  let err = m[1];
 
-  function add(value) {
+  try {
+    err = decodeURIComponent(err);
+  } catch (_) {}
+
+  const d =
+    text.match(
+      /[?&]error_description=([^&\s"'<>#]+)/i
+    );
+
+  if (d) {
     try {
-      const cleaned = String(value)
-        .replace(/&amp;/gi, "&");
-
-      const u = new URL(
-        cleaned,
-        baseUrl
-      ).toString();
-
-      if (!out.includes(u)) {
-        out.push(u);
-      }
+      return `${err}: ${decodeURIComponent(
+        d[1]
+      )}`;
     } catch (_) {}
   }
 
-  const attributes =
-    /(?:href|action|location)=["']([^"']*(?:signin-oidc-meu|ExternalLogin\/Callback|connect\/authorize\/callback)[^"']*)["']/gi;
-
-  for (const m of String(html || "").matchAll(
-    attributes
-  )) {
-    add(m[1]);
-  }
-
-  const raw =
-    /((?:https?:\/\/[^\s"'<>]+)?\/(?:signin-oidc-meu|ExternalLogin\/Callback|connect\/authorize\/callback)\?[^"\s'<>]+)/gi;
-
-  for (const m of String(html || "").matchAll(
-    raw
-  )) {
-    add(m[1]);
-  }
-
-  return out;
+  return err;
 }
 
-/* =========================================================
-   Diagnostic page detection
-========================================================= */
 
-function detectLoginPage(html) {
-  const text = String(html || "").toLowerCase();
-
-  return (
-    text.includes("username") ||
-    text.includes("password") ||
-    text.includes("sign in") ||
-    text.includes("log in") ||
-    text.includes("cognito")
-  );
-}
-
-function extractLoginError(html) {
-  const text = String(html || "");
-
-  const patterns = [
-    /incorrect[^<]{0,200}/i,
-    /invalid[^<]{0,200}/i,
-    /wrong[^<]{0,200}/i,
-    /failed[^<]{0,200}/i,
-    /error[^<]{0,200}/i,
-    /incorrectes[^<]{0,200}/i,
-    /invalides[^<]{0,200}/i,
-  ];
-
-  for (const p of patterns) {
-    const m = text.match(p);
-
-    if (m) {
-      return m[0]
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 180);
-    }
-  }
-
-  return null;
-}
-
-/* =========================================================
-   MELCloud OAuth LOGIN
-========================================================= */
+// ============================================================
+// MELCLOUD LOGIN OAuth PKCE
+// ============================================================
 
 async function loginToMelcloud(
   email,
@@ -528,31 +498,40 @@ async function loginToMelcloud(
 ) {
   const jar = new Map();
 
-  /* ---------- PKCE ---------- */
+  // PKCE verifier
+  const verifier =
+    b64url(
+      crypto.getRandomValues(
+        new Uint8Array(32)
+      )
+    );
 
-  const verifier = b64url(
-    crypto.getRandomValues(
-      new Uint8Array(32)
-    )
-  );
-
+  // PKCE challenge
   const digest =
     await crypto.subtle.digest(
       "SHA-256",
-      new TextEncoder().encode(verifier)
+      new TextEncoder().encode(
+        verifier
+      )
     );
 
-  const challenge = b64url(
-    new Uint8Array(digest)
-  );
+  const challenge =
+    b64url(
+      new Uint8Array(digest)
+    );
 
-  const state = b64url(
-    crypto.getRandomValues(
-      new Uint8Array(16)
-    )
-  );
+  // OAuth state
+  const state =
+    b64url(
+      crypto.getRandomValues(
+        new Uint8Array(16)
+      )
+    );
 
-  /* ---------- PAR ---------- */
+
+  // ========================================================
+  // PAR
+  // ========================================================
 
   const parBody =
     new URLSearchParams({
@@ -565,24 +544,38 @@ async function loginToMelcloud(
       redirect_uri: REDIRECT_URI,
     });
 
-  const par = await fetch(PAR_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type":
-        "application/x-www-form-urlencoded",
-      Accept: "application/json",
-      "User-Agent": USER_AGENT,
-    },
-    body: parBody.toString(),
-  });
+  const par =
+    await fetch(
+      PAR_URL,
+      {
+        method: "POST",
+
+        headers: {
+          "Content-Type":
+            "application/x-www-form-urlencoded",
+          Accept: "application/json",
+          "User-Agent": USER_AGENT,
+        },
+
+        body:
+          parBody.toString(),
+      }
+    );
 
   if (par.status !== 201) {
+    const detail =
+      await par.text();
+
     throw new Error(
-      `MELCloud PAR HTTP ${par.status}`
+      `MELCloud PAR HTTP ${par.status}: ${detail.slice(
+        0,
+        500
+      )}`
     );
   }
 
-  const parData = await par.json();
+  const parData =
+    await par.json();
 
   if (!parData.request_uri) {
     throw new Error(
@@ -590,7 +583,10 @@ async function loginToMelcloud(
     );
   }
 
-  /* ---------- AUTHORIZE ---------- */
+
+  // ========================================================
+  // AUTHORIZE
+  // ========================================================
 
   const authorize =
     `${AUTHORIZE_URL}?client_id=${encodeURIComponent(
@@ -599,39 +595,54 @@ async function loginToMelcloud(
       parData.request_uri
     )}`;
 
-  const browserUA =
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) " +
-    "AppleWebKit/605.1.15 (KHTML, like Gecko) " +
-    "Version/26.1 Mobile/15E148 Safari/604.1";
 
   const first =
     await httpWithCookies(
       authorize,
       {
         method: "GET",
+
         headers: {
-          "User-Agent": browserUA,
+          "User-Agent": USER_AGENT,
           Accept:
-            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          "Accept-Language":
-            "fr-FR,fr;q=0.9,en;q=0.8",
+            "text/html,application/xhtml+xml",
         },
       },
       jar
     );
 
+
   let authCode =
     extractCode(first.url);
 
   if (authCode) {
-    return exchangeCode(
+    return await exchangeCode(
       authCode,
       verifier
     );
   }
 
-  let body =
+
+  const finalHost =
+    (() => {
+      try {
+        return (
+          new URL(first.url)
+            .hostname || ""
+        );
+      } catch (_) {
+        return "";
+      }
+    })();
+
+
+  const body =
     await first.response.text();
+
+
+  // ========================================================
+  // ERREUR OAUTH
+  // ========================================================
 
   const firstError =
     extractOAuthError(first.url) ||
@@ -643,20 +654,10 @@ async function loginToMelcloud(
     );
   }
 
-  const finalHost = (() => {
-    try {
-      return (
-        new URL(first.url).hostname ||
-        ""
-      );
-    } catch (_) {
-      return "";
-    }
-  })();
 
-  /* =====================================================
-     COGNITO LOGIN
-  ===================================================== */
+  // ========================================================
+  // COGNITO LOGIN
+  // ========================================================
 
   if (
     finalHost.endsWith(
@@ -664,18 +665,30 @@ async function loginToMelcloud(
     ) &&
     /\/login/i.test(first.url)
   ) {
-    const hidden =
-      extractHiddenInputs(body);
-
     const csrf =
       extractCsrf(body);
 
-    if (csrf) {
-      hidden._csrf = csrf;
+    if (!csrf) {
+      throw new Error(
+        "Impossible de récupérer le jeton CSRF MELCloud"
+      );
     }
 
+
+    const action =
+      extractFormAction(
+        body,
+        first.url
+      );
+
+
+    const hidden =
+      extractHiddenInputs(body);
+
+    hidden._csrf = csrf;
     hidden.username = email;
     hidden.password = password;
+
 
     if (
       !Object.prototype.hasOwnProperty.call(
@@ -686,263 +699,259 @@ async function loginToMelcloud(
       hidden.cognitoAsfData = "";
     }
 
+
     const form =
       new URLSearchParams();
 
+
     for (
-      const [key, value] of Object.entries(
+      const [k, v] of Object.entries(
         hidden
       )
     ) {
       form.set(
-        key,
-        String(value)
+        k,
+        String(v)
       );
     }
 
-    /*
-     * IMPORTANT :
-     *
-     * MELCloud/Cognito renvoie actuellement HTTP 200
-     * lorsque la page de login est soumise.
-     *
-     * On poste sur l'URL courante et non sur l'action
-     * HTML du formulaire.
-     */
 
-    const loginHeaders = {
-      "User-Agent": browserUA,
-      "Content-Type":
-        "application/x-www-form-urlencoded",
-      Origin:
-        `https://${finalHost}`,
-      Referer:
-        first.url,
-      Accept:
-        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language":
-        "fr-FR,fr;q=0.9,en;q=0.8",
-      "Cache-Control":
-        "max-age=0",
-      "Sec-Fetch-Dest":
-        "document",
-      "Sec-Fetch-Mode":
-        "navigate",
-      "Sec-Fetch-Site":
-        "same-origin",
-    };
+    // ======================================================
+    // POST LOGIN
+    // ======================================================
 
-    let logged =
+    const logged =
       await httpWithCookies(
-        first.url,
+        action,
         {
           method: "POST",
-          headers: loginHeaders,
-          body: form.toString(),
+
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/22F76",
+
+            "Content-Type":
+              "application/x-www-form-urlencoded",
+
+            Origin:
+              `https://${finalHost}`,
+
+            Referer:
+              first.url,
+
+            Accept:
+              "text/html,application/xhtml+xml",
+          },
+
+          body:
+            form.toString(),
         },
         jar
       );
 
-    /* ===================================================
-       POST RESPONSE / CALLBACK CHAIN
-    =================================================== */
+
+    // ======================================================
+    // CODE DIRECTEMENT DANS URL
+    // ======================================================
+
+    authCode =
+      extractCode(
+        logged.url
+      );
+
+    if (authCode) {
+      return await exchangeCode(
+        authCode,
+        verifier
+      );
+    }
+
+
+    // ======================================================
+    // CODE DANS BODY
+    // ======================================================
+
+    const loggedBody =
+      await logged.response.text();
+
+
+    authCode =
+      extractCode(
+        loggedBody
+      );
+
+    if (authCode) {
+      return await exchangeCode(
+        authCode,
+        verifier
+      );
+    }
+
+
+    // ======================================================
+    // ERREUR OAUTH DANS URL/BODY
+    // ======================================================
+
+    const err =
+      extractOAuthError(
+        logged.url
+      ) ||
+      extractOAuthError(
+        loggedBody
+      );
+
+    if (err) {
+      throw new Error(
+        `MELCloud OAuth après connexion: ${err}`
+      );
+    }
+
+
+    // ======================================================
+    // CALLBACK POSSIBLE DANS HTML
+    // ======================================================
+
+    const callbackMatches = [
+      logged.url,
+
+      ...Array.from(
+        loggedBody.matchAll(
+          /(?:href|action|location)=["']([^"']*\/connect\/authorize\/callback\?[^"']*)["']/gi
+        )
+      ).map(
+        m => m[1]
+      ),
+
+      ...Array.from(
+        loggedBody.matchAll(
+          /(\/connect\/authorize\/callback\?[^"'\s<>]+)/gi
+        )
+      ).map(
+        m => m[1]
+      ),
+    ];
+
 
     for (
-      let step = 0;
-      step < 12;
-      step++
+      const candidate of callbackMatches
     ) {
-      /* ---------- code dans URL ---------- */
+      try {
+        const callbackUrl =
+          new URL(
+            candidate,
+            logged.url
+          ).toString();
 
-      authCode =
-        extractCode(logged.url);
-
-      if (authCode) {
-        return exchangeCode(
-          authCode,
-          verifier
-        );
-      }
-
-      /* ---------- body ---------- */
-
-      const loggedBody =
-        await logged.response.text();
-
-      authCode =
-        extractCode(loggedBody);
-
-      if (authCode) {
-        return exchangeCode(
-          authCode,
-          verifier
-        );
-      }
-
-      /* ---------- OAuth error ---------- */
-
-      const err =
-        extractOAuthError(
-          logged.url
-        ) ||
-        extractOAuthError(
-          loggedBody
-        );
-
-      if (err) {
-        throw new Error(
-          `MELCloud OAuth après connexion: ${err}`
-        );
-      }
-
-      /* ---------- meta refresh ---------- */
-
-      const meta =
-        extractMetaRefresh(
-          loggedBody,
-          logged.url
-        );
-
-      if (meta) {
-        logged =
+        const callbackResult =
           await httpWithCookies(
-            meta,
+            callbackUrl,
             {
               method: "GET",
+
               headers: {
                 "User-Agent":
-                  browserUA,
+                  USER_AGENT,
+
                 Accept:
-                  "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                Referer:
-                  logged.url,
+                  "text/html,application/xhtml+xml",
               },
             },
             jar
           );
 
-        continue;
-      }
 
-      /* ---------- callback URLs ---------- */
-
-      const callbacks =
-        extractCallbackUrls(
-          loggedBody,
-          logged.url
-        );
-
-      if (callbacks.length) {
-        let advanced = false;
-
-        for (
-          const callback of callbacks
-        ) {
-          try {
-            logged =
-              await httpWithCookies(
-                callback,
-                {
-                  method: "GET",
-                  headers: {
-                    "User-Agent":
-                      browserUA,
-                    Accept:
-                      "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    Referer:
-                      logged.url,
-                  },
-                },
-                jar
-              );
-
-            advanced = true;
-            break;
-          } catch (_) {}
-        }
-
-        if (advanced) {
-          continue;
-        }
-      }
-
-      /* ---------- diagnostic ---------- */
-
-      if (
-        logged.response.status === 200 &&
-        detectLoginPage(
-          loggedBody
-        )
-      ) {
-        const loginError =
-          extractLoginError(
-            loggedBody
+        authCode =
+          extractCode(
+            callbackResult.url
+          ) ||
+          extractCode(
+            await callbackResult.response.text()
           );
 
-        if (loginError) {
-          throw new Error(
-            `Identifiants MELCloud refusés: ${loginError}`
+
+        if (authCode) {
+          return await exchangeCode(
+            authCode,
+            verifier
           );
         }
+      } catch (_) {}
+    }
 
-        /*
-         * On ne renvoie volontairement pas le HTML.
-         * On expose uniquement des informations
-         * permettant de diagnostiquer l'étape.
-         */
 
-        let currentHost = "";
+    // ======================================================
+    // CODE ÉVENTUELLEMENT DANS ACTION
+    // ======================================================
 
-        try {
-          currentHost =
-            new URL(
-              logged.url
-            ).hostname;
-        } catch (_) {}
+    const formActionCode =
+      extractCode(action);
 
-        throw new Error(
-          `MELCloud a renvoyé la page de connexion HTTP 200 ` +
-          `(étape ${currentHost || "inconnue"}, ` +
-          `cookies=${jar.size}, ` +
-          `hidden=${Object.keys(hidden).length})`
-        );
-      }
-
-      throw new Error(
-        `Connexion MELCloud refusée ou redirection OAuth introuvable ` +
-        `(HTTP ${logged.response.status}, URL ${logged.url})`
+    if (formActionCode) {
+      return await exchangeCode(
+        formActionCode,
+        verifier
       );
     }
 
+
+    // ======================================================
+    // NOUVEAU DEBUG IMPORTANT
+    // ======================================================
+
+    const errorText =
+      loggedBody
+        .replace(
+          /<script[\s\S]*?<\/script>/gi,
+          " "
+        )
+        .replace(
+          /<style[\s\S]*?<\/style>/gi,
+          " "
+        )
+        .replace(
+          /<[^>]+>/g,
+          " "
+        )
+        .replace(
+          /\s+/g,
+          " "
+        )
+        .trim();
+
+
     throw new Error(
-      "Connexion MELCloud: trop d'étapes de redirection"
+      `Connexion MELCloud refusée ou redirection OAuth introuvable ` +
+      `(HTTP ${logged.response.status}, URL ${logged.url}, ` +
+      `DETAIL=${errorText.slice(0, 1500)})`
     );
   }
 
-  /* =====================================================
-     FALLBACK
-  ===================================================== */
+
+  // ========================================================
+  // CODE DANS LA PAGE INITIALE
+  // ========================================================
 
   authCode =
     extractCode(body);
 
   if (authCode) {
-    return exchangeCode(
+    return await exchangeCode(
       authCode,
       verifier
     );
   }
 
+
   throw new Error(
     `MELCloud n'a pas renvoyé de code OAuth ` +
-    `(étape ${finalHost || "inconnue"}, ` +
-    `HTTP ${first.response.status})`
+    `(étape ${finalHost || "inconnue"}, HTTP ${first.response.status}, URL ${first.url})`
   );
 }
 
-/* =========================================================
-   OAuth TOKEN EXCHANGE
-========================================================= */
+
+// ============================================================
+// TOKEN EXCHANGE
+// ============================================================
 
 async function exchangeCode(
   authCode,
@@ -952,42 +961,60 @@ async function exchangeCode(
     new URLSearchParams({
       grant_type:
         "authorization_code",
-      code: authCode,
+
+      code:
+        authCode,
+
       redirect_uri:
         REDIRECT_URI,
+
       code_verifier:
         verifier,
+
       client_id:
         CLIENT_ID,
     });
 
+
   const tokenResponse =
-    await fetch(TOKEN_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type":
-          "application/x-www-form-urlencoded",
-        Accept:
-          "application/json",
-        "User-Agent":
-          USER_AGENT,
-      },
-      body:
-        tokenBody.toString(),
-    });
+    await fetch(
+      TOKEN_URL,
+      {
+        method: "POST",
+
+        headers: {
+          "Content-Type":
+            "application/x-www-form-urlencoded",
+
+          Accept:
+            "application/json",
+
+          "User-Agent":
+            USER_AGENT,
+        },
+
+        body:
+          tokenBody.toString(),
+      }
+    );
+
 
   if (!tokenResponse.ok) {
     const detail =
       await tokenResponse.text();
 
     throw new Error(
-      `MELCloud échange OAuth HTTP ${tokenResponse.status}: ` +
-      detail.slice(0, 300)
+      `MELCloud échange OAuth HTTP ${tokenResponse.status}: ${detail.slice(
+        0,
+        500
+      )}`
     );
   }
 
+
   const tokens =
     await tokenResponse.json();
+
 
   if (!tokens.refresh_token) {
     throw new Error(
@@ -995,12 +1022,14 @@ async function exchangeCode(
     );
   }
 
+
   return tokens;
 }
 
-/* =========================================================
-   Utility
-========================================================= */
+
+// ============================================================
+// BASE64 URL
+// ============================================================
 
 function b64url(bytes) {
   let binary = "";
@@ -1015,9 +1044,10 @@ function b64url(bytes) {
     .replace(/=+$/g, "");
 }
 
-/* =========================================================
-   MELCloud device helpers
-========================================================= */
+
+// ============================================================
+// MELCLOUD DATA HELPERS
+// ============================================================
 
 function setting(c, ks) {
   for (const k of ks) {
@@ -1033,9 +1063,7 @@ function setting(c, ks) {
     ]
   ) {
     for (
-      const x of Array.isArray(
-        c?.[n]
-      )
+      const x of Array.isArray(c?.[n])
         ? c[n]
         : []
     ) {
@@ -1062,11 +1090,13 @@ function setting(c, ks) {
   return null;
 }
 
+
 function on(c) {
-  const v = setting(c, [
-    "power",
-    "Power",
-  ]);
+  const v =
+    setting(c, [
+      "power",
+      "Power",
+    ]);
 
   return (
     v === true ||
@@ -1074,6 +1104,7 @@ function on(c) {
       "true"
   );
 }
+
 
 function room(c) {
   const n =
@@ -1092,6 +1123,7 @@ function room(c) {
     ? n
     : 20;
 }
+
 
 function temp(c) {
   const n =
@@ -1112,6 +1144,7 @@ function temp(c) {
     : 20;
 }
 
+
 function mode(c) {
   if (!on(c)) {
     return "off";
@@ -1125,6 +1158,7 @@ function mode(c) {
       ]) ||
         "Automatic"
     ).toLowerCase();
+
 
   if (m.includes("cool"))
     return "cool";
@@ -1141,6 +1175,7 @@ function mode(c) {
   return "auto";
 }
 
+
 function fan(c) {
   const s =
     String(
@@ -1151,6 +1186,7 @@ function fan(c) {
         "FanSpeed",
       ]) ?? ""
     ).toLowerCase();
+
 
   return s.includes("one") ||
     s === "1"
@@ -1169,6 +1205,11 @@ function fan(c) {
     ? "Five"
     : "Auto";
 }
+
+
+// ============================================================
+// GOOGLE HOME DEVICES
+// ============================================================
 
 function devices(cs) {
   return cs.map(c => ({
@@ -1221,6 +1262,7 @@ function devices(cs) {
             speed_values: [
               {
                 lang: "fr",
+
                 speed_synonym: [
                   n,
                   i
@@ -1228,8 +1270,10 @@ function devices(cs) {
                     : "Automatique",
                 ],
               },
+
               {
                 lang: "en",
+
                 speed_synonym: [
                   n,
                   i
@@ -1247,9 +1291,10 @@ function devices(cs) {
   }));
 }
 
-/* =========================================================
-   Google Home fulfillment
-========================================================= */
+
+// ============================================================
+// GOOGLE HOME FULFILLMENT
+// ============================================================
 
 async function fulfillment(
   req,
@@ -1264,6 +1309,7 @@ async function fulfillment(
   const intent =
     b?.inputs?.[0]?.intent;
 
+
   if (
     !req.headers.get(
       "authorization"
@@ -1271,9 +1317,12 @@ async function fulfillment(
   ) {
     return new Response(
       "Non autorisé",
-      { status: 401 }
+      {
+        status: 401,
+      }
     );
   }
+
 
   const r =
     await mel(
@@ -1281,15 +1330,19 @@ async function fulfillment(
       "context"
     );
 
+
   if (!r.ok) {
     return Response.json(
       {
         error:
           `MELCloud context HTTP ${r.status}`,
       },
-      { status: 502 }
+      {
+        status: 502,
+      }
     );
   }
+
 
   const cs =
     (
@@ -1297,20 +1350,24 @@ async function fulfillment(
     )?.buildings?.[0]
       ?.airToAirUnits || [];
 
+
   if (
     intent ===
     "action.devices.SYNC"
   ) {
     return Response.json({
       requestId: id,
+
       payload: {
         agentUserId:
           "melhome_user",
+
         devices:
           devices(cs),
       },
     });
   }
+
 
   if (
     intent ===
@@ -1329,22 +1386,28 @@ async function fulfillment(
         status: "SUCCESS",
         thermostatMode:
           mode(c),
+
         thermostatTemperatureSetpoint:
           temp(c),
+
         thermostatTemperatureAmbient:
           room(c),
+
         currentFanSpeedSetting:
           fan(c),
       };
     }
 
+
     return Response.json({
       requestId: id,
+
       payload: {
         devices: d,
       },
     });
   }
+
 
   if (
     intent ===
@@ -1352,15 +1415,15 @@ async function fulfillment(
   ) {
     const out = [];
 
+
     for (
       const cmd of
-        b?.inputs?.[0]
-          ?.payload
-          ?.commands || []
+      b?.inputs?.[0]?.payload
+        ?.commands || []
     ) {
       for (
         const dev of
-          cmd.devices || []
+        cmd.devices || []
       ) {
         const c =
           cs.find(
@@ -1371,7 +1434,11 @@ async function fulfillment(
               String(dev.id)
           );
 
-        if (!c) continue;
+
+        if (!c) {
+          continue;
+        }
+
 
         const p = {
           power: null,
@@ -1387,19 +1454,23 @@ async function fulfillment(
           inStandbyMode: null,
         };
 
+
         const s = {
           online: true,
           thermostatMode:
             mode(c),
+
           thermostatTemperatureSetpoint:
             temp(c),
+
           currentFanSpeedSetting:
             fan(c),
         };
 
+
         for (
           const e of
-            cmd.execution || []
+          cmd.execution || []
         ) {
           if (
             e.command ===
@@ -1414,6 +1485,7 @@ async function fulfillment(
                 : "off";
           }
 
+
           if (
             e.command ===
             "action.devices.commands.ThermostatTemperatureSetpoint"
@@ -1427,6 +1499,7 @@ async function fulfillment(
                 .thermostatTemperatureSetpoint;
           }
 
+
           if (
             e.command ===
             "action.devices.commands.ThermostatSetMode"
@@ -1437,6 +1510,7 @@ async function fulfillment(
 
             s.thermostatMode =
               m;
+
 
             if (m === "off") {
               p.power = false;
@@ -1450,20 +1524,16 @@ async function fulfillment(
 
               p.operationMode =
                 ({
-                  cool:
-                    "Cool",
-                  heat:
-                    "Heat",
-                  dry:
-                    "Dry",
-                  "fan-only":
-                    "Fan",
-                  auto:
-                    "Automatic",
+                  cool: "Cool",
+                  heat: "Heat",
+                  dry: "Dry",
+                  "fan-only": "Fan",
+                  auto: "Automatic",
                 })[m] ??
                 null;
             }
           }
+
 
           if (
             e.command ===
@@ -1476,6 +1546,7 @@ async function fulfillment(
               e.params.fanSpeed;
           }
         }
+
 
         const u =
           await mel(
@@ -1496,6 +1567,7 @@ async function fulfillment(
             }
           );
 
+
         out.push(
           u.ok
             ? {
@@ -1504,8 +1576,10 @@ async function fulfillment(
                     dev.id
                   ),
                 ],
+
                 status:
                   "SUCCESS",
+
                 states: s,
               }
             : {
@@ -1514,8 +1588,10 @@ async function fulfillment(
                     dev.id
                   ),
                 ],
+
                 status:
                   "ERROR",
+
                 errorCode:
                   "hardError",
               }
@@ -1523,13 +1599,16 @@ async function fulfillment(
       }
     }
 
+
     return Response.json({
       requestId: id,
+
       payload: {
         commands: out,
       },
     });
   }
+
 
   return Response.json({
     requestId: id,
@@ -1537,9 +1616,10 @@ async function fulfillment(
   });
 }
 
-/* =========================================================
-   HTML page
-========================================================= */
+
+// ============================================================
+// HTML PAGE
+// ============================================================
 
 function page(
   body,
@@ -1555,9 +1635,11 @@ ${body}
 </html>`,
     {
       status,
+
       headers: {
         "content-type":
           "text/html;charset=utf-8",
+
         "cache-control":
           "no-store",
       },
@@ -1565,45 +1647,54 @@ ${body}
   );
 }
 
-/* =========================================================
-   Worker
-========================================================= */
+
+// ============================================================
+// WORKER
+// ============================================================
 
 export default {
   async fetch(req, env) {
     const u =
       new URL(req.url);
 
+
     try {
-      /* ---------- STATUS ---------- */
+
+      // ======================================================
+      // STATUS
+      // ======================================================
 
       if (
         req.method === "GET" &&
-        u.pathname ===
-          "/api/status"
+        u.pathname === "/api/status"
       ) {
         const o =
           await getOAuth(env);
 
         return Response.json({
           ok: true,
+
           oauthSession:
             !!o?.refresh_token,
+
           tokenExpiresAt:
             o?.expires_at ??
             null,
         });
       }
 
-      /* ---------- SETUP GET ---------- */
+
+      // ======================================================
+      // SETUP GET
+      // ======================================================
 
       if (
         req.method === "GET" &&
-        u.pathname ===
-          "/setup"
+        u.pathname === "/setup"
       ) {
         const o =
           await getOAuth(env);
+
 
         return page(`
 <h1>❄️ MELHome Bridge</h1>
@@ -1627,9 +1718,11 @@ ${
   method="POST"
   action="/setup"
 >
+
 <label>
 E-mail MELCloud
 </label>
+
 <br>
 
 <input
@@ -1643,6 +1736,7 @@ E-mail MELCloud
 <label>
 Mot de passe MELCloud
 </label>
+
 <br>
 
 <input
@@ -1663,34 +1757,38 @@ Connecter MELCloud
 </form>
 
 <p style="font-size:13px">
-Le Worker utilise ces identifiants uniquement pendant cette requête
-pour obtenir le refresh_token OAuth.
+Le Worker utilise ces identifiants uniquement pendant cette requête pour obtenir le refresh_token OAuth.
 Ils ne sont pas enregistrés dans D1.
 </p>
 `);
       }
 
-      /* ---------- SETUP POST ---------- */
+
+      // ======================================================
+      // SETUP POST
+      // ======================================================
 
       if (
         req.method === "POST" &&
-        u.pathname ===
-          "/setup"
+        u.pathname === "/setup"
       ) {
         const f =
           await req.formData();
 
+
         const email =
           String(
             f.get("email") ||
-              ""
+            ""
           ).trim();
+
 
         const password =
           String(
             f.get("password") ||
-              ""
+            ""
           );
+
 
         if (
           !email ||
@@ -1703,17 +1801,21 @@ Ils ne sont pas enregistrés dans D1.
           );
         }
 
+
         try {
+
           const tokens =
             await loginToMelcloud(
               email,
               password
             );
 
+
           await saveOAuth(
             env,
             tokens
           );
+
 
           return page(`
 <h1>✅ MELCloud connecté</h1>
@@ -1729,27 +1831,31 @@ Vérifier le statut
 </p>
 `);
         } catch (e) {
-          return page(
-            `
+
+          const message =
+            String(
+              e?.message || e
+            ).replace(
+              /[&<>]/g,
+              c =>
+                ({
+                  "&":
+                    "&amp;",
+                  "<":
+                    "&lt;",
+                  ">":
+                    "&gt;",
+                })[c]
+            );
+
+
+          return page(`
 <h2>
 ❌ Connexion MELCloud impossible
 </h2>
 
 <p>
-${String(
-  e?.message || e
-).replace(
-  /[&<>]/g,
-  c =>
-    ({
-      "&":
-        "&amp;",
-      "<":
-        "&lt;",
-      ">":
-        "&gt;",
-    })[c]
-)}
+${message}
 </p>
 
 <p>
@@ -1763,7 +1869,10 @@ Réessayer
         }
       }
 
-      /* ---------- SAVE OAUTH ---------- */
+
+      // ======================================================
+      // SAVE OAUTH
+      // ======================================================
 
       if (
         req.method === "POST" &&
@@ -1773,6 +1882,7 @@ Réessayer
         const b =
           await req.json();
 
+
         if (
           !b?.refresh_token
         ) {
@@ -1781,21 +1891,28 @@ Réessayer
               error:
                 "refresh_token manquant",
             },
-            { status: 400 }
+            {
+              status: 400,
+            }
           );
         }
+
 
         await saveOAuth(
           env,
           b
         );
 
+
         return Response.json({
           success: true,
         });
       }
 
-      /* ---------- GOOGLE HOME ---------- */
+
+      // ======================================================
+      // GOOGLE HOME
+      // ======================================================
 
       if (
         req.method === "POST" &&
@@ -1808,12 +1925,14 @@ Réessayer
         );
       }
 
-      /* ---------- HEALTH ---------- */
+
+      // ======================================================
+      // HEALTH
+      // ======================================================
 
       if (
         req.method === "GET" &&
-        u.pathname ===
-          "/health"
+        u.pathname === "/health"
       ) {
         return Response.json({
           status: "ok",
@@ -1822,7 +1941,10 @@ Réessayer
         });
       }
 
-      /* ---------- ROOT ---------- */
+
+      // ======================================================
+      // HOME
+      // ======================================================
 
       if (
         req.method === "GET" &&
@@ -1830,6 +1952,7 @@ Réessayer
       ) {
         const o =
           await getOAuth(env);
+
 
         return page(`
 <h1>❄️ MELHome Bridge</h1>
@@ -1857,17 +1980,25 @@ Configurer MELCloud
 `);
       }
 
+
+      // ======================================================
+      // 404
+      // ======================================================
+
       return new Response(
         "Not found",
         {
           status: 404,
         }
       );
+
     } catch (e) {
+
       console.error(
         "[MELHOME]",
         e
       );
+
 
       return Response.json(
         {
