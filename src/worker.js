@@ -237,7 +237,7 @@ function extractForm(body, baseUrl) {
     return null;
   }
 
-  // 💡 CORRECTION 1 : Nettoyage des entités HTML dans l'attribut action
+  // Nettoyage des entités HTML dans l'attribut action
   const rawAction = match[1].replace(/&amp;/g, "&");
 
   const action = new URL(
@@ -381,8 +381,9 @@ async function followOAuth(
           currentUrl
         ).toString();
 
+      /* 💡 CORRECTION : Détection de 'melcloudhome://' */
       if (
-        /^melcloud:\/\//i.test(nextUrl)
+        /^melcloud(?:home)?:\/\//i.test(nextUrl)
       ) {
         return {
           url: nextUrl,
@@ -418,6 +419,40 @@ async function followOAuth(
       };
     }
 
+    /* 💡 CORRECTION : Gestion de la page JavaScript /Redirect de MELCloud */
+    try {
+      const parsedUrl = new URL(currentUrl);
+      if (parsedUrl.pathname.toLowerCase() === "/redirect") {
+        const redirectUri = parsedUrl.searchParams.get("RedirectUri");
+        if (redirectUri) {
+          currentUrl = new URL(redirectUri, currentUrl).toString();
+          init = {
+            method: "GET",
+            headers: {
+              "User-Agent": USER_AGENT,
+              Accept: "text/html,application/xhtml+xml"
+            }
+          };
+          continue;
+        }
+      }
+    } catch {}
+
+    /* 💡 CORRECTION : Au cas où, on check les meta-refresh de secours */
+    const metaMatch = body.match(/content=["'][0-9]+;\s*url=["']?([^"'>]+)["']?/i);
+    if (metaMatch) {
+      const rawNext = metaMatch[1].replace(/&amp;/g, "&");
+      currentUrl = new URL(rawNext, currentUrl).toString();
+      init = {
+        method: "GET",
+        headers: {
+          "User-Agent": USER_AGENT,
+          Accept: "text/html,application/xhtml+xml"
+        }
+      };
+      continue;
+    }
+
     const form =
       extractForm(
         body,
@@ -425,7 +460,7 @@ async function followOAuth(
       );
 
     if (form) {
-      // 💡 CORRECTION 2 : On stoppe l'auto-soumission si on est sur Cognito.
+      // On stoppe l'auto-soumission si on est sur Cognito.
       if (currentUrl.includes("amazoncognito.com")) {
         return {
           url: currentUrl,
@@ -587,12 +622,6 @@ async function loginToMelcloud(
         .toLowerCase();
   } catch {}
 
-  /*
-   * IMPORTANT :
-   *
-   * Nous ne faisons plus l'hypothèse
-   * qu'un champ _csrf existe.
-   */
 
   if (
     !extractCode(result.url) &&
@@ -609,13 +638,6 @@ async function loginToMelcloud(
         body,
         result.url
       );
-
-    /*
-     * Diagnostic uniquement.
-     *
-     * On regarde les champs présents
-     * sans afficher leurs valeurs.
-     */
 
     const fieldNames = [];
 
@@ -647,11 +669,6 @@ async function loginToMelcloud(
               : name
         )
     });
-
-    /*
-     * Si Cognito nous présente un formulaire,
-     * on cherche les champs réellement utilisés.
-     */
 
     if (!form) {
       throw new Error(
