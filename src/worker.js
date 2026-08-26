@@ -322,11 +322,14 @@ function getGoogleMode(clim) {
 }
 
 function getGoogleFanSpeed(clim) {
-  const actual = getSetting(clim, ['ActualFanSpeed', 'actualFanSpeed']);
   const set = getSetting(clim, ['SetFanSpeed', 'setFanSpeed', 'FanSpeed', 'fanSpeed']);
   
-  const val = (actual !== undefined && actual !== null && String(actual).toLowerCase() !== 'auto') ? actual : (set !== undefined && set !== null ? set : actual);
+  const setStr = set !== undefined && set !== null ? String(set).trim().toLowerCase() : '';
+  if (setStr.includes('auto') || setStr.includes('automatic') || setStr === '0') {
+    return 'Auto';
+  }
 
+  const val = (set !== undefined && set !== null) ? set : getSetting(clim, ['ActualFanSpeed', 'actualFanSpeed']);
   if (val === undefined || val === null) return 'Auto';
   
   if (val === 1 || val === '1') return 'One';
@@ -559,17 +562,9 @@ export default {
           const devicesState = {};
           clims.forEach(clim => {
             const id = String(clim.id ?? clim.ID);
-            let fanSpeed = getGoogleFanSpeed(clim);
-            
-            // 🛑 TEST DE FORCE POUR LA CHAMBRE 2
-            const name = String(clim.givenDisplayName || clim.GivenDisplayName || "");
-            if (name.toLowerCase().includes("chambre 2")) {
-              fanSpeed = "One"; 
-            }
-
             devicesState[id] = {
               online: true, status: "SUCCESS", thermostatMode: getGoogleMode(clim),
-              thermostatTemperatureSetpoint: getTemp(clim), thermostatTemperatureAmbient: getRoomTemp(clim), currentFanSpeedSetting: fanSpeed
+              thermostatTemperatureSetpoint: getTemp(clim), thermostatTemperatureAmbient: getRoomTemp(clim), currentFanSpeedSetting: getGoogleFanSpeed(clim)
             };
           });
           return Response.json({ requestId, payload: { devices: devicesState } });
