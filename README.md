@@ -1,31 +1,33 @@
-❄️ Pont MELCloud Home vers Google Home (Via Cloudflare)
-Ce projet permet de relier vos climatiseurs Mitsubishi (utilisant la nouvelle application MELCloud Home) à Google Home. Il utilise un Cloudflare Worker gratuit pour faire le pont entre l'API secrète de Mitsubishi et les serveurs de Google, tout en gardant votre connexion active de manière totalement autonome.
+Here is the complete translated guide, perfectly formatted for a GitHub README.md file. You can copy and paste this directly into your repository!
 
-📋 Prérequis
-Avant de commencer, assurez-vous d'avoir :
+❄️ MELCloud Home to Google Home Bridge (via Cloudflare)
+This project allows you to connect your Mitsubishi air conditioners (using the new MELCloud Home app) to Google Home. It relies on a free Cloudflare Worker to act as a seamless bridge between Mitsubishi's undocumented mobile API and Google's Smart Home servers, keeping your connection alive autonomously.
 
-Vos identifiants de l'application MELCloud Home (e-mail et mot de passe).
+📋 Prerequisites
+Before you begin, make sure you have:
 
-Un compte Cloudflare gratuit (sur cloudflare.com).
+Your MELCloud Home app credentials (email and password).
 
-Un compte Google (le même que celui utilisé sur votre application Google Home sur votre téléphone).
+A free Cloudflare account (cloudflare.com).
 
-🛠️ Étape 1 : Création de la base de données (Cloudflare D1)
-Le script a besoin d'une petite base de données pour sauvegarder votre session et ne pas vous redemander votre mot de passe tous les jours.
+A Google account (the same one used in the Google Home app on your phone).
 
-Connectez-vous à votre tableau de bord Cloudflare.
+🛠️ Step 1: Create the Database (Cloudflare D1)
+The script needs a small database to securely save your session tokens so you don't have to re-enter your password every day.
 
-Dans le menu de gauche, allez dans Workers et Pages > D1 SQL Database.
+Log in to your Cloudflare dashboard.
 
-Cliquez sur le bouton bleu Créer une base de données.
+In the left sidebar, navigate to Workers & Pages > D1 SQL Database.
 
-Donnez-lui un nom (par exemple : melhome-db) et cliquez sur Créer.
+Click the blue Create database button.
 
-Une fois la base créée, cliquez sur son nom pour l'ouvrir.
+Give it a name (e.g., melhome-db) and click Create.
 
-Allez dans l'onglet Console.
+Once created, click on its name to open it.
 
-Copiez-collez la commande SQL suivante dans la zone de texte, puis cliquez sur Exécuter :
+Go to the Console tab.
+
+Copy and paste the following SQL command into the text area, then click Execute:
 
 SQL
 CREATE TABLE IF NOT EXISTS oauth_tokens (
@@ -36,105 +38,105 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
-Votre base de données est prête !
+Your database is now ready!
 
-🚀 Étape 2 : Création du Cloudflare Worker
-Le Worker est le cœur du système : c'est lui qui héberge le code.
+🚀 Step 2: Create the Cloudflare Worker
+The Worker is the brain of the system: it hosts the code and handles the API requests.
 
-Toujours dans le menu de gauche de Cloudflare, allez dans Workers et Pages > Aperçu.
+In the left sidebar of Cloudflare, go to Workers & Pages > Overview.
 
-Cliquez sur le bouton bleu Créer une application, puis sur Créer un Worker.
+Click Create application, then Create Worker.
 
-Donnez-lui un nom (par exemple : melhome-bridge) et cliquez sur Déployer.
+Give it a name (e.g., melhome-bridge) and click Deploy.
 
-Sur la page de confirmation, cliquez sur Modifier le code.
+On the confirmation page, click Edit code.
 
-Dans l'éditeur qui s'ouvre, supprimez tout le code existant et collez l'intégralité du code JavaScript du projet.
+In the editor that opens, delete all existing code and paste the entire JavaScript code of this project.
 
-Cliquez sur le bouton bleu Déployer en haut à droite.
+Click the blue Deploy button in the top right corner.
 
-🔗 Étape 3 : Lier la base de données au Worker
-Pour que le code puisse lire et écrire dans la base de données créée à l'Étape 1, il faut les lier.
+🔗 Step 3: Bind the Database to the Worker
+To allow the code to read and write to the database created in Step 1, you need to link them.
 
-Revenez sur la page principale de votre Worker (melhome-bridge).
+Go back to the main page of your Worker (melhome-bridge).
 
-Allez dans l'onglet Paramètres > Variables et liaisons.
+Go to the Settings tab > Bindings (or Variables & Secrets depending on the UI layout).
 
-Dans la section "Liaisons", cliquez sur Ajouter puis choisissez Base de données D1.
+Under the "Bindings" section, click Add and choose D1 Database.
 
-Remplissez le formulaire ainsi :
+Fill out the form as follows:
 
-Nom de la variable : DB (Respectez bien les majuscules, c'est indispensable)
+Variable name: DB (Must be uppercase, this is mandatory)
 
-Base de données D1 : Sélectionnez melhome-db (créée à l'étape 1).
+D1 Database: Select melhome-db (created in step 1).
 
-Cliquez sur Déployer.
+Click Deploy.
 
-🔑 Étape 4 : Première connexion à MELCloud
-En haut de la page de votre Worker, vous verrez un lien du type [https://melhome-bridge.votre-pseudo.workers.dev](https://melhome-bridge.votre-pseudo.workers.dev). Cliquez dessus.
+🔑 Step 4: First Connection to MELCloud
+At the top of your Worker's page, you will see a URL like [https://melhome-bridge.your-username.workers.dev](https://melhome-bridge.your-username.workers.dev). Click on it.
 
-Vous arrivez sur l'interface d'accueil de votre pont. Cliquez sur 🔐 Configurer MELCloud.
+You will land on the homepage of your bridge. Click on 🔐 Configure MELCloud.
 
-Entrez vos identifiants MELCloud Home et validez.
+Enter your MELCloud Home credentials and submit.
 
-Si un message de succès s'affiche, cliquez sur 🌡️ Voir mes Clims.
+If a success message appears, click on 🌡️ View my ACs.
 
-Vous devriez voir vos climatiseurs apparaître avec la possibilité de les allumer ou les éteindre. Gardez l'URL de votre Worker sous la main, nous en avons besoin pour l'étape suivante.
+You should see your air conditioners listed with the ability to turn them on or off. Keep your Worker's URL handy, we will need it for the next step.
 
-🏠 Étape 5 : Configuration de l'Action Google Home
-Il faut maintenant expliquer à Google comment discuter avec votre Worker.
+🏠 Step 5: Configure the Google Home Action
+Now, you need to tell Google how to talk to your Worker.
 
-Allez sur la Google Actions Console et connectez-vous avec votre compte Google.
+Go to the Google Actions Console and log in with your Google account.
 
-Cliquez sur New Project, donnez-lui un nom (ex: "Mes Clims MELCloud"), choisissez votre langue/pays, puis cliquez sur Create project.
+Click New Project, give it a name (e.g., "My MELCloud ACs"), select your language/country, and click Create project.
 
-Sur la page suivante, choisissez Smart Home et cliquez sur Start Building.
+On the next screen, select Smart Home and click Start Building.
 
-Dans le menu de gauche, cliquez sur Actions.
+In the left menu, click Actions.
 
-Remplissez le champ Fulfillment URL avec l'adresse de votre Worker suivie de /google/fulfillment :
+Fill the Fulfillment URL field with your Worker's URL followed by /google/fulfillment:
 
-Exemple : [https://melhome-bridge.votre-pseudo.workers.dev/google/fulfillment](https://melhome-bridge.votre-pseudo.workers.dev/google/fulfillment)
+Example: [https://melhome-bridge.your-username.workers.dev/google/fulfillment](https://melhome-bridge.your-username.workers.dev/google/fulfillment)
 
-Cliquez sur Save.
+Click Save.
 
-Dans le menu de gauche, allez dans Develop > Account linking. Remplissez les champs exactement comme suit :
+In the left menu, go to Develop > Account linking. Fill in the fields exactly like this:
 
-Client ID : google
+Client ID: google
 
-Client Secret : secret
+Client Secret: secret
 
-Authorization URL : https://[VOTRE_URL_WORKER]/google/auth
+Authorization URL: https://[YOUR_WORKER_URL]/google/auth
 
-Token URL : https://[VOTRE_URL_WORKER]/google/token
+Token URL: https://[YOUR_WORKER_URL]/google/token
 
-Laissez le reste par défaut et cliquez sur Save en haut à droite.
+Leave the rest as default and click Save in the top right corner.
 
-Allez dans l'onglet Test (en haut de l'écran) pour activer votre projet sur votre compte Google.
+Go to the Test tab (at the top of the screen) to enable your project on your Google account.
 
-📱 Étape 6 : Association sur votre téléphone
-C'est la dernière étape !
+📱 Step 6: Link in the Google Home App
+This is the final step!
 
-Ouvrez l'application Google Home sur votre smartphone.
+Open the Google Home app on your smartphone.
 
-Appuyez sur le bouton + en haut à gauche.
+Tap the + button in the top left corner.
 
-Choisissez Configurer un appareil > Fonctionne avec Google.
+Choose Set up device > Works with Google.
 
-Dans la barre de recherche, tapez [test] Mes Clims MELCloud (ou le nom de votre projet).
+In the search bar, type [test] My MELCloud ACs (or whatever you named your project).
 
-Appuyez dessus. Une page s'ouvre vous demandant un code PIN.
+Tap on it. A web page will open asking for a security PIN.
 
-Entrez le code par défaut : 1234 et validez.
+Enter the default PIN: 1234 and submit.
 
-Succès ! Google Home va synchroniser vos climatiseurs. Vous n'avez plus qu'à les assigner à vos pièces.
+Success! Google Home will sync your air conditioners. You just need to assign them to your rooms.
 
-Vous pouvez maintenant piloter vos équipements à la voix : "Ok Google, allume le salon", "Ok Google, règle la température de la chambre sur 24 degrés".
+You can now control your devices using your voice: "Ok Google, turn on the living room", "Ok Google, set the bedroom temperature to 24 degrees".
 
-🛠️ Dépannage & FAQ
-Google Home me dit que l'appareil est indisponible.
-Il est possible que votre jeton MELCloud ait été révoqué (par exemple si vous avez changé votre mot de passe sur l'application officielle).
-Solution : Retournez sur l'URL de votre Worker Cloudflare, allez dans "Configurer MELCloud" et reconnectez-vous. Google Home refonctionnera immédiatement.
+🛠️ Troubleshooting & FAQ
+Google Home says the device is offline or unavailable.
+It is highly likely that your MELCloud token has been revoked by Mitsubishi (for example, if you changed your password in the official app).
+Solution: Go back to your Cloudflare Worker URL, click "Configure MELCloud," and log in again to fetch a new token. Google Home will immediately start working again.
 
-Où puis-je changer le code PIN "1234" ?
-Si vous souhaitez sécuriser l'association, vous pouvez modifier la constante GOOGLE_HOME_PIN = "1234"; au tout début du code de votre Worker dans Cloudflare, puis redéployer.
+Where can I change the "1234" PIN code?
+If you want to secure the linking process, you can change the GOOGLE_HOME_PIN = "1234"; constant at the very top of your Worker's code in Cloudflare, then click Deploy.
