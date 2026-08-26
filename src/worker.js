@@ -559,9 +559,17 @@ export default {
           const devicesState = {};
           clims.forEach(clim => {
             const id = String(clim.id ?? clim.ID);
+            let fanSpeed = getGoogleFanSpeed(clim);
+            
+            // 🛑 TEST DE FORCE POUR LA CHAMBRE 2
+            const name = String(clim.givenDisplayName || clim.GivenDisplayName || "");
+            if (name.toLowerCase().includes("chambre 2")) {
+              fanSpeed = "One"; 
+            }
+
             devicesState[id] = {
               online: true, status: "SUCCESS", thermostatMode: getGoogleMode(clim),
-              thermostatTemperatureSetpoint: getTemp(clim), thermostatTemperatureAmbient: getRoomTemp(clim), currentFanSpeedSetting: getGoogleFanSpeed(clim)
+              thermostatTemperatureSetpoint: getTemp(clim), thermostatTemperatureAmbient: getRoomTemp(clim), currentFanSpeedSetting: fanSpeed
             };
           });
           return Response.json({ requestId, payload: { devices: devicesState } });
