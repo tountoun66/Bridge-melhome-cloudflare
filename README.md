@@ -556,6 +556,82 @@ MIT License
 if you intend to distribute this project under the MIT License.
 
 ---
+# ⚠️ Legal Disclaimer
+
+**This project is an independent, community-developed project and is not affiliated with, sponsored by, endorsed by, or officially connected to Mitsubishi Electric, MELCloud, MELCloud Home, Google, Google Home, or any of their subsidiaries, affiliates, or partners.**
+
+The author of this project:
+
+* ❌ Is **not an employee, representative, partner, or authorized developer** of Mitsubishi Electric.
+* ❌ Does **not represent Mitsubishi Electric, MELCloud, or Google**.
+* ❌ Does **not claim ownership of the MELCloud, MELCloud Home, Mitsubishi Electric, Google, or Google Home trademarks, logos, names, or intellectual property**.
+* ❌ Has **no rights or ownership over Mitsubishi Electric's software, APIs, servers, trademarks, or other intellectual property**.
+* ❌ Has **no authority to grant any license or rights** to Mitsubishi Electric, MELCloud, Google, or any third party.
+* ❌ Does **not sell or redistribute Mitsubishi Electric's software or services**.
+
+All trademarks, product names, logos, and brand names mentioned in this project belong to their respective owners and are used only for **identification and interoperability purposes**.
+
+## Purpose of this project
+
+This project was created as an **independent technical interoperability project** to allow users to connect compatible Mitsubishi Electric air-conditioning equipment with Google Home.
+
+The project does not intend to replace, modify, or redistribute the official MELCloud Home application.
+
+The project communicates with services provided by third parties. The author does not control those services and cannot guarantee that they will remain compatible with this project.
+
+## No warranty
+
+This software is provided **"AS IS"**, without warranty of any kind, express or implied.
+
+The author is not responsible for:
+
+* Loss of access to a MELCloud Home account
+* Changes to Mitsubishi Electric or MELCloud services
+* Changes to Google Home or Google Smart Home services
+* API changes or service interruptions
+* Loss or corruption of authentication tokens
+* Damage resulting from the use or misuse of this software
+* Any malfunction of connected air-conditioning equipment
+* Any direct, indirect, incidental, or consequential damages resulting from the use of this project
+
+Users are responsible for ensuring that their use of this software complies with the terms and conditions applicable to their MELCloud Home, Mitsubishi Electric, Google, Cloudflare, and other relevant services.
+
+## Third-party services
+
+This project relies on third-party services, including:
+
+* Mitsubishi Electric / MELCloud Home
+* Google Home / Google Smart Home
+* Cloudflare Workers
+* Cloudflare D1
+
+These services are controlled by their respective providers.
+
+The author has no control over their availability, functionality, authentication mechanisms, APIs, policies, or terms of service.
+
+## User responsibility
+
+By using this project, you acknowledge that you are responsible for:
+
+* Your own MELCloud Home account
+* Your Google account
+* Your Cloudflare account
+* Your credentials and authentication tokens
+* Your compliance with applicable laws and third-party terms of service
+* Any consequences resulting from the use of this software
+
+**If you do not agree with these conditions, do not use this project.**
+
+---
+
+### Trademark Notice
+
+**Mitsubishi Electric**, **MELCloud**, **MELCloud Home**, **Google**, and **Google Home** are trademarks of their respective owners.
+
+Their use in this documentation is solely intended to identify compatible products and services.
+
+**No affiliation, sponsorship, endorsement, or ownership is claimed.**
+
 
 # ⭐ Credits
 
