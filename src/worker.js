@@ -322,18 +322,23 @@ function getGoogleMode(clim) {
 }
 
 function getGoogleFanSpeed(clim) {
-  // Lecture prioritaire de la vitesse réelle (ActualFanSpeed), puis de la consigne
-  const val = getSetting(clim, ['ActualFanSpeed', 'actualFanSpeed', 'SetFanSpeed', 'setFanSpeed', 'fanSpeed', 'FanSpeed']);
+  const val = getSetting(clim, ['ActualFanSpeed', 'actualFanSpeed', 'FanSpeed', 'fanSpeed', 'SetFanSpeed', 'setFanSpeed']);
   if (val === undefined || val === null) return 'Auto';
+  
+  if (val === 1 || val === '1') return 'One';
+  if (val === 2 || val === '2') return 'Two';
+  if (val === 3 || val === '3') return 'Three';
+  if (val === 4 || val === '4') return 'Four';
+  if (val === 5 || val === '5') return 'Five';
   
   const str = String(val).trim().toLowerCase();
   
-  if (str === 'auto' || str === 'automatic') return 'Auto';
-  if (str === 'one' || str === '1' || str === 'faible') return 'One';
-  if (str === 'two' || str === '2') return 'Two';
-  if (str === 'three' || str === '3' || str === 'moyenne') return 'Three';
-  if (str === 'four' || str === '4') return 'Four';
-  if (str === 'five' || str === '5' || str === 'forte' || str === 'max') return 'Five';
+  if (str === 'auto' || str === 'automatic' || str === '0') return 'Auto';
+  if (str.includes('one') || str === 'faible') return 'One';
+  if (str.includes('two')) return 'Two';
+  if (str.includes('three') || str === 'moyenne') return 'Three';
+  if (str.includes('four')) return 'Four';
+  if (str.includes('five') || str === '5' || str === 'forte' || str === 'max') return 'Five';
   
   return 'Auto';
 }
