@@ -377,18 +377,24 @@ CREATE TABLE IF NOT EXISTS app_config (
 
 Then configure your administrator credentials:
 
-```sql
-INSERT OR REPLACE INTO app_config (key, value)
-VALUES ('admin_user', 'admin');
+```
+CREATE TABLE IF NOT EXISTS app_config (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 
-INSERT OR REPLACE INTO app_config (key, value)
-VALUES ('admin_pass', 'your_secure_password_here');
+INSERT OR REPLACE INTO app_config (key, value) VALUES ('admin_user', 'admin');
+INSERT OR REPLACE INTO app_config (key, value) VALUES ('admin_pass', 'your_secure_password_here');
 ```
 
 Replace:
 
-```text
+```text (password)
 your_secure_password_here
+```
+and 
+```text (user)
+Admin
 ```
 
 with a strong password of your choice.
