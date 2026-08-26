@@ -350,6 +350,18 @@ function getGoogleFanSpeed(clim) {
   return 'Auto';
 }
 
+function getVaneVertical(clim) {
+  const val = getSetting(clim, ['VaneVerticalDirection', 'vaneVerticalDirection']);
+  if (!val) return 'Auto';
+  return String(val);
+}
+
+function getVaneHorizontal(clim) {
+  const val = getSetting(clim, ['VaneHorizontalDirection', 'vaneHorizontalDirection']);
+  if (!val) return 'Auto';
+  return String(val);
+}
+
 /* ============================================================
    WORKER PRINCIPAL (ROUTER)
    ============================================================ */
@@ -423,6 +435,7 @@ export default {
           htmlList += `<li style="background:#f5f5f5;margin-bottom:10px;padding:15px;border-radius:5px;">
             <b style="font-size:18px;">${esc(u.givenDisplayName)}</b> - ${isPoweredOn(u) ? "✅ Allumé" : "💤 Éteint"}<br>
             <span style="color:#555">Mode : ${getGoogleMode(u)} | Consigne : ${getTemp(u)}°C | Pièce : ${getRoomTemp(u)}°C | Vent : ${getGoogleFanSpeed(u)}</span><br>
+            <span style="color:#777">Ailette Vert : ${getVaneVertical(u)} | Ailette Horiz : ${getVaneHorizontal(u)}</span><br>
             
             <details style="margin-top:10px;"><summary style="cursor:pointer;font-size:12px;color:#005cff;">🔍 Voir le JSON brut de cette clim</summary>
             <pre style="background:#fff;padding:10px;font-size:11px;overflow:auto;max-height:150px;">${esc(JSON.stringify(u, null, 2))}</pre>
@@ -533,7 +546,11 @@ export default {
           const googleDevices = clims.map(clim => ({
             id: String(clim.id ?? clim.ID),
             type: "action.devices.types.THERMOSTAT",
-            traits: ["action.devices.traits.TemperatureSetting", "action.devices.traits.FanSpeed"],
+            traits: [
+              "action.devices.traits.TemperatureSetting",
+              "action.devices.traits.FanSpeed",
+              "action.devices.traits.Modes"
+            ],
             name: { name: clim.givenDisplayName || clim.GivenDisplayName || "Climatiseur" },
             willReportState: false,
             attributes: {
@@ -551,7 +568,37 @@ export default {
                   { speed_name: "Five", speed_values: [{ lang: "fr", speed_synonym: ["Vitesse 5", "5", "Cinq", "Forte", "Max"] }, { lang: "en", speed_synonym: ["Speed 5", "5", "High", "Max"] }] }
                 ],
                 ordered: true
-              }
+              },
+              availableModes: [
+                {
+                  name: "vane_vertical",
+                  name_values: [{ lang: "fr", synonym: ["Ailette verticale", "Volet vertical", "Direction haut bas"] }],
+                  settings: [
+                    { setting_name: "Auto", setting_values: [{ lang: "fr", synonym: ["Auto", "Automatique"] }] },
+                    { setting_name: "1", setting_values: [{ lang: "fr", synonym: ["Position 1", "Haut"] }] },
+                    { setting_name: "2", setting_values: [{ lang: "fr", synonym: ["Position 2"] }] },
+                    { setting_name: "3", setting_values: [{ lang: "fr", synonym: ["Position 3", "Milieu"] }] },
+                    { setting_name: "4", setting_values: [{ lang: "fr", synonym: ["Position 4"] }] },
+                    { setting_name: "5", setting_values: [{ lang: "fr", synonym: ["Position 5", "Bas"] }] },
+                    { setting_name: "Swing", setting_values: [{ lang: "fr", synonym: ["Balayage", "Oscillation", "Swing"] }] }
+                  ],
+                  ordered: false
+                },
+                {
+                  name: "vane_horizontal",
+                  name_values: [{ lang: "fr", synonym: ["Ailette horizontale", "Volet horizontal", "Direction gauche droite"] }],
+                  settings: [
+                    { setting_name: "Auto", setting_values: [{ lang: "fr", synonym: ["Auto", "Automatique"] }] },
+                    { setting_name: "1", setting_values: [{ lang: "fr", synonym: ["Position 1", "Gauche"] }] },
+                    { setting_name: "2", setting_values: [{ lang: "fr", synonym: ["Position 2"] }] },
+                    { setting_name: "3", setting_values: [{ lang: "fr", synonym: ["Position 3", "Centre"] }] },
+                    { setting_name: "4", setting_values: [{ lang: "fr", synonym: ["Position 4"] }] },
+                    { setting_name: "5", setting_values: [{ lang: "fr", synonym: ["Position 5", "Droite"] }] },
+                    { setting_name: "Swing", setting_values: [{ lang: "fr", synonym: ["Balayage", "Oscillation", "Swing"] }] }
+                  ],
+                  ordered: false
+                }
+              ]
             }
           }));
           return Response.json({ requestId, payload: { agentUserId: "melhome_user", devices: googleDevices } });
@@ -563,8 +610,16 @@ export default {
           clims.forEach(clim => {
             const id = String(clim.id ?? clim.ID);
             devicesState[id] = {
-              online: true, status: "SUCCESS", thermostatMode: getGoogleMode(clim),
-              thermostatTemperatureSetpoint: getTemp(clim), thermostatTemperatureAmbient: getRoomTemp(clim), currentFanSpeedSetting: getGoogleFanSpeed(clim)
+              online: true, 
+              status: "SUCCESS", 
+              thermostatMode: getGoogleMode(clim),
+              thermostatTemperatureSetpoint: getTemp(clim), 
+              thermostatTemperatureAmbient: getRoomTemp(clim), 
+              currentFanSpeedSetting: getGoogleFanSpeed(clim),
+              currentModeSettings: {
+                vane_vertical: getVaneVertical(clim),
+                vane_horizontal: getVaneHorizontal(clim)
+              }
             };
           });
           return Response.json({ requestId, payload: { devices: devicesState } });
@@ -586,15 +641,21 @@ export default {
                 operationMode: getSetting(currentDeviceData, ['operationMode', 'OperationMode']) || "Cool",
                 setTemperature: getTemp(currentDeviceData),
                 setFanSpeed: getSetting(currentDeviceData, ['setFanSpeed', 'SetFanSpeed', 'ActualFanSpeed']) || "Auto",
-                vaneVerticalDirection: getSetting(currentDeviceData, ['vaneVerticalDirection', 'VaneVerticalDirection']) || "Auto",
-                vaneHorizontalDirection: getSetting(currentDeviceData, ['vaneHorizontalDirection', 'VaneHorizontalDirection']) || "Auto",
+                vaneVerticalDirection: getVaneVertical(currentDeviceData),
+                vaneHorizontalDirection: getVaneHorizontal(currentDeviceData),
                 temperatureIncrementOverride: null,
                 inStandbyMode: getSetting(currentDeviceData, ['inStandbyMode', 'InStandbyMode']) === true ? true : null
               };
 
               const updatedStates = {
-                online: true, thermostatMode: getGoogleMode(currentDeviceData),
-                thermostatTemperatureSetpoint: getTemp(currentDeviceData), currentFanSpeedSetting: getGoogleFanSpeed(currentDeviceData)
+                online: true, 
+                thermostatMode: getGoogleMode(currentDeviceData),
+                thermostatTemperatureSetpoint: getTemp(currentDeviceData), 
+                currentFanSpeedSetting: getGoogleFanSpeed(currentDeviceData),
+                currentModeSettings: {
+                  vane_vertical: getVaneVertical(currentDeviceData),
+                  vane_horizontal: getVaneHorizontal(currentDeviceData)
+                }
               };
 
               for (const exec of command.execution || []) {
@@ -622,6 +683,17 @@ export default {
                 if (exec.command === "action.devices.commands.SetFanSpeed") {
                   payloadJson.setFanSpeed = exec.params?.fanSpeed;
                   updatedStates.currentFanSpeedSetting = exec.params?.fanSpeed;
+                }
+                if (exec.command === "action.devices.commands.Modes") {
+                  const updateModeSettings = exec.params?.updateModeSettings || {};
+                  if (updateModeSettings.vane_vertical !== undefined) {
+                    payloadJson.vaneVerticalDirection = updateModeSettings.vane_vertical;
+                    updatedStates.currentModeSettings.vane_vertical = updateModeSettings.vane_vertical;
+                  }
+                  if (updateModeSettings.vane_horizontal !== undefined) {
+                    payloadJson.vaneHorizontalDirection = updateModeSettings.vane_horizontal;
+                    updatedStates.currentModeSettings.vane_horizontal = updateModeSettings.vane_horizontal;
+                  }
                 }
               }
 
