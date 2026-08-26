@@ -213,7 +213,9 @@ Select your language and country, then click **Create project**.
 
 Inside your project, select:
 
-**Smart Home → Start Building**
+**Smart Home → Device type *
+
+AC Heating, AC Unit
 
 From the left-hand menu, open:
 
@@ -268,16 +270,8 @@ Leave the remaining settings at their default values.
 
 Click **Save**.
 
+The status must change to "draft".
 ---
-
-# 🧪 Step 7 — Enable Test Mode
-
-At the top of the Google Actions Console, open the:
-
-**Test**
-
-tab.
-
 Enable your project for your Google account.
 
 Your Smart Home integration is now ready to be linked with Google Home.
