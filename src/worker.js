@@ -589,7 +589,7 @@ export default {
                 vaneVerticalDirection: getSetting(currentDeviceData, ['vaneVerticalDirection', 'VaneVerticalDirection']) || "Auto",
                 vaneHorizontalDirection: getSetting(currentDeviceData, ['vaneHorizontalDirection', 'VaneHorizontalDirection']) || "Auto",
                 temperatureIncrementOverride: null,
-                inStandbyMode: getSetting(currentDeviceData, ['inStandbyMode', 'InStandbyMode']) === true ? true : null
+                inStandbyMode: false
               };
 
               const updatedStates = {
@@ -609,14 +609,15 @@ export default {
                 if (exec.command === "action.devices.commands.ThermostatSetMode") {
                   const mode = exec.params?.thermostatMode;
                   updatedStates.thermostatMode = mode;
-                  if (mode === "off") payloadJson.power = false;
-                  else {
+                  if (mode === "off") {
+                    payloadJson.power = false;
+                  } else {
                     payloadJson.power = true;
                     if (mode === "cool") payloadJson.operationMode = "Cool";
-                    if (mode === "heat") payloadJson.operationMode = "Heat";
-                    if (mode === "dry") payloadJson.operationMode = "Dry";
-                    if (mode === "fan-only") payloadJson.operationMode = "Fan";
-                    if (mode === "auto") payloadJson.operationMode = "Automatic";
+                    else if (mode === "heat") payloadJson.operationMode = "Heat";
+                    else if (mode === "dry") payloadJson.operationMode = "Dry";
+                    else if (mode === "fan-only") payloadJson.operationMode = "Fan";
+                    else if (mode === "auto" || mode === "on") payloadJson.operationMode = "Automatic";
                   }
                 }
                 if (exec.command === "action.devices.commands.SetFanSpeed") {
