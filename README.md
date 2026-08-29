@@ -452,6 +452,10 @@ Log in again using your MELCloud Home credentials.
 A new authentication token will be obtained and stored in Cloudflare D1.
 
 Google Home should then be able to communicate with your air conditioners again.
+---
+update : 
+
+To activate the automatic background task (Cron Trigger): Once the code is deployed, return to your Worker's home page in Cloudflare. Go to the **Settings** tab, then **Triggers**. In the **Cron Triggers** section, click **Add Cron Trigger**. Enter this expression: `0 */3 * * *` Click **Add/Save**. Cloudflare will now call the `scheduled` function at the end of the script exactly every 3 hours, renewing your access token without any action required from you (or Google)!
 
 ---
 
