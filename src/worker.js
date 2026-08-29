@@ -589,7 +589,7 @@ export default {
                 vaneVerticalDirection: getSetting(currentDeviceData, ['vaneVerticalDirection', 'VaneVerticalDirection']) || "Auto",
                 vaneHorizontalDirection: getSetting(currentDeviceData, ['vaneHorizontalDirection', 'VaneHorizontalDirection']) || "Auto",
                 temperatureIncrementOverride: null,
-                inStandbyMode: false
+                inStandbyMode: getSetting(currentDeviceData, ['inStandbyMode', 'InStandbyMode']) === true ? true : null
               };
 
               const updatedStates = {
