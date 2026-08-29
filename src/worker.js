@@ -102,8 +102,14 @@ async function getValidAccessToken(env) {
   let oauth = await getOAuth(env);
   if (!oauth?.refresh_token) return null;
 
-  if (!oauth.expires_at || oauth.expires_at < Date.now() + 300000) {
+  // 3 heures en millisecondes
+  const threeHoursInMs = 10800000;
+  const isOlderThan3Hours = (Date.now() - oauth.updated_at) > threeHoursInMs;
+
+  // Rafraîchir si expiré (ou expire dans < 5min) OU si généré il y a plus de 3h
+  if (!oauth.expires_at || oauth.expires_at < Date.now() + 300000 || isOlderThan3Hours) {
     try {
+      console.log("Rafraîchissement du token...");
       oauth = await refreshToken(env, oauth);
     } catch (e) {
       console.error("Erreur refresh token", e);
@@ -351,10 +357,11 @@ function getGoogleFanSpeed(clim) {
 }
 
 /* ============================================================
-   WORKER PRINCIPAL (ROUTER)
+   WORKER PRINCIPAL ET CRON JOB
    ============================================================ */
 
 export default {
+  // ROUTER HTTP (Requêtes Web et Google Home)
   async fetch(request, env) {
     const url = new URL(request.url);
 
@@ -445,7 +452,7 @@ export default {
             const res = await fetch('/api/test-command', {
               method: 'POST',
               headers: {'Content-Type':'application/json'},
-              body: JSON.stringify({ id, payload: { power, inStandbyMode: false } })
+              body: JSON.stringify({ id, payload: { power, inStandbyMode: null } })
             });
             const data = await res.json();
             
@@ -470,6 +477,19 @@ export default {
         if (!token) return Response.json({ ok: false, status: 401, response: "Non connecté" });
         
         const body = await request.json();
+        
+        // Pour les tests depuis le dashboard, on lit d'abord l'état actuel pour conserver inStandbyMode
+        const apiResponse = await fetch(`${API_BASE}/context`, {
+          headers: { "Authorization": `Bearer ${token}`, "Accept": "application/json", "User-Agent": USER_AGENT }
+        });
+        const contextData = await apiResponse.json();
+        const clims = contextData.buildings?.[0]?.airToAirUnits || [];
+        const targetClim = clims.find(c => String(c.id ?? c.ID) === String(body.id));
+        
+        if (targetClim) {
+           body.payload.inStandbyMode = getSetting(targetClim, ['inStandbyMode', 'InStandbyMode']) === true ? true : null;
+        }
+
         const urlToCall = `${API_BASE}/monitor/ataunit/${encodeURIComponent(body.id)}`;
         
         const res = await fetch(urlToCall, {
@@ -649,6 +669,20 @@ export default {
     } catch (error) {
       console.error("[WORKER ERROR]", error);
       return html(`<h1>❌ Erreur interne</h1><pre>${esc(error.stack || error.message)}</pre>`, 500);
+    }
+  },
+
+  // TÂCHE DE FOND (CRON TRIGGER)
+  async scheduled(event, env, ctx) {
+    console.log("Exécution de la tâche planifiée Cron Trigger...");
+    const oauth = await getOAuth(env);
+    if (oauth?.refresh_token) {
+      try {
+        await refreshToken(env, oauth);
+        console.log("Token rafraîchi automatiquement avec succès en arrière-plan.");
+      } catch (e) {
+        console.error("Erreur lors du rafraîchissement automatique (Cron)", e);
+      }
     }
   }
 };
