@@ -102,11 +102,9 @@ async function getValidAccessToken(env) {
   let oauth = await getOAuth(env);
   if (!oauth?.refresh_token) return null;
 
-  // 3 heures en millisecondes
   const threeHoursInMs = 10800000;
   const isOlderThan3Hours = (Date.now() - oauth.updated_at) > threeHoursInMs;
 
-  // Rafraîchir si expiré (ou expire dans < 5min) OU si généré il y a plus de 3h
   if (!oauth.expires_at || oauth.expires_at < Date.now() + 300000 || isOlderThan3Hours) {
     try {
       console.log("Rafraîchissement du token...");
@@ -317,25 +315,25 @@ function getTemp(clim) {
   return Number.isFinite(num) && num > 0 && num < 60 ? num : 20.0;
 }
 
+// CORRECTION : Détection robuste des modes par leurs ID numériques
+function getGoogleModeByValue(val) {
+  const str = String(val).toLowerCase();
+  if (val === 1 || val === '1' || str.includes('heat')) return 'heat';
+  if (val === 2 || val === '2' || str.includes('dry')) return 'dry';
+  if (val === 3 || val === '3' || str.includes('cool')) return 'cool';
+  if (val === 7 || val === '7' || str.includes('fan')) return 'fan-only';
+  return 'auto'; // 8 par défaut
+}
+
 function getGoogleMode(clim) {
   if (!isPoweredOn(clim)) return 'off';
-  const mode = String(getSetting(clim, ['operationMode', 'OperationMode']) || 'Automatic').toLowerCase();
-  if (mode.includes('cool')) return 'cool';
-  if (mode.includes('heat')) return 'heat';
-  if (mode.includes('dry')) return 'dry';
-  if (mode.includes('fan')) return 'fan-only';
-  return 'auto';
+  return getGoogleModeByValue(getSetting(clim, ['operationMode', 'OperationMode']));
 }
 
 function getGoogleFanSpeed(clim) {
-  const set = getSetting(clim, ['SetFanSpeed', 'setFanSpeed', 'FanSpeed', 'fanSpeed']);
+  // CORRECTION : On ne lit plus ActualFanSpeed qui tombe à 0 quand c'est éteint
+  const val = getSetting(clim, ['SetFanSpeed', 'setFanSpeed']);
   
-  const setStr = set !== undefined && set !== null ? String(set).trim().toLowerCase() : '';
-  if (setStr.includes('auto') || setStr.includes('automatic') || setStr === '0') {
-    return 'Auto';
-  }
-
-  const val = (set !== undefined && set !== null) ? set : getSetting(clim, ['ActualFanSpeed', 'actualFanSpeed']);
   if (val === undefined || val === null) return 'Auto';
   
   if (val === 1 || val === '1') return 'One';
@@ -600,18 +598,20 @@ export default {
               const currentDeviceData = clims.find(c => String(c.id ?? c.ID) === climId);
               if (!currentDeviceData) continue;
 
-              // CORRECTION IMPORTANTE : Sauvegarde stricte de la vitesse numérique (0 au lieu de "Auto")
-              let currentFan = getSetting(currentDeviceData, ['setFanSpeed', 'SetFanSpeed', 'ActualFanSpeed']);
-              let currentVaneV = getSetting(currentDeviceData, ['vaneVerticalDirection', 'VaneVerticalDirection']);
-              let currentVaneH = getSetting(currentDeviceData, ['vaneHorizontalDirection', 'VaneHorizontalDirection']);
+              // CORRECTION : On lit uniquement SetFanSpeed (vitesse souhaitée)
+              let currentFan = getSetting(currentDeviceData, ['SetFanSpeed', 'setFanSpeed']);
+              let currentVaneV = getSetting(currentDeviceData, ['VaneVerticalDirection', 'vaneVerticalDirection']);
+              let currentVaneH = getSetting(currentDeviceData, ['VaneHorizontalDirection', 'vaneHorizontalDirection']);
+              let currentMode = getSetting(currentDeviceData, ['OperationMode', 'operationMode']);
 
+              // Utilisation exclusive des valeurs numériques (API native MELCloud)
               let payloadJson = {
                 power: isPoweredOn(currentDeviceData),
-                operationMode: getSetting(currentDeviceData, ['operationMode', 'OperationMode']) ?? "Cool",
+                operationMode: (currentMode !== null && currentMode !== undefined) ? currentMode : 8,
                 setTemperature: getTemp(currentDeviceData),
                 setFanSpeed: (currentFan !== null && currentFan !== undefined) ? currentFan : 0,
-                vaneVerticalDirection: (currentVaneV !== null && currentVaneV !== undefined) ? currentVaneV : "Auto",
-                vaneHorizontalDirection: (currentVaneH !== null && currentVaneH !== undefined) ? currentVaneH : "Auto",
+                vaneVerticalDirection: (currentVaneV !== null && currentVaneV !== undefined) ? currentVaneV : 0,
+                vaneHorizontalDirection: (currentVaneH !== null && currentVaneH !== undefined) ? currentVaneH : 0,
                 temperatureIncrementOverride: null,
                 inStandbyMode: getSetting(currentDeviceData, ['inStandbyMode', 'InStandbyMode']) === true ? true : null
               };
@@ -624,7 +624,12 @@ export default {
               for (const exec of command.execution || []) {
                 if (exec.command === "action.devices.commands.OnOff") {
                   payloadJson.power = Boolean(exec.params?.on);
-                  updatedStates.thermostatMode = payloadJson.power ? "auto" : "off";
+                  // CORRECTION : On reprend le VRAI mode actuel au lieu de forcer "auto"
+                  if (payloadJson.power) {
+                    updatedStates.thermostatMode = getGoogleModeByValue(payloadJson.operationMode);
+                  } else {
+                    updatedStates.thermostatMode = "off";
+                  }
                 }
                 if (exec.command === "action.devices.commands.ThermostatTemperatureSetpoint") {
                   payloadJson.setTemperature = exec.params?.thermostatTemperatureSetpoint;
@@ -637,19 +642,19 @@ export default {
                     payloadJson.power = false;
                   } else {
                     payloadJson.power = true;
-                    if (mode === "cool") payloadJson.operationMode = "Cool";
-                    else if (mode === "heat") payloadJson.operationMode = "Heat";
-                    else if (mode === "dry") payloadJson.operationMode = "Dry";
-                    else if (mode === "fan-only") payloadJson.operationMode = "Fan";
-                    else if (mode === "auto" || mode === "on") payloadJson.operationMode = "Automatic";
+                    // CORRECTION : Envoi strict des identifiants numériques
+                    if (mode === "cool") payloadJson.operationMode = 3;
+                    else if (mode === "heat") payloadJson.operationMode = 1;
+                    else if (mode === "dry") payloadJson.operationMode = 2;
+                    else if (mode === "fan-only") payloadJson.operationMode = 7;
+                    else if (mode === "auto" || mode === "on") payloadJson.operationMode = 8;
                   }
                 }
-                // CORRECTION IMPORTANTE : Traduction des vitesses Google vers des chiffres pour MELCloud
                 if (exec.command === "action.devices.commands.SetFanSpeed") {
                   const ghSpeed = exec.params?.fanSpeed;
                   updatedStates.currentFanSpeedSetting = ghSpeed;
                   
-                  let melSpeed = 0; // Auto par défaut
+                  let melSpeed = 0; 
                   if (ghSpeed === "One") melSpeed = 1;
                   else if (ghSpeed === "Two") melSpeed = 2;
                   else if (ghSpeed === "Three") melSpeed = 3;
