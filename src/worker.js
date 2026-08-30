@@ -478,7 +478,6 @@ export default {
         
         const body = await request.json();
         
-        // Pour les tests depuis le dashboard, on lit d'abord l'état actuel pour conserver inStandbyMode
         const apiResponse = await fetch(`${API_BASE}/context`, {
           headers: { "Authorization": `Bearer ${token}`, "Accept": "application/json", "User-Agent": USER_AGENT }
         });
@@ -601,13 +600,18 @@ export default {
               const currentDeviceData = clims.find(c => String(c.id ?? c.ID) === climId);
               if (!currentDeviceData) continue;
 
+              // CORRECTION IMPORTANTE : Sauvegarde stricte de la vitesse numérique (0 au lieu de "Auto")
+              let currentFan = getSetting(currentDeviceData, ['setFanSpeed', 'SetFanSpeed', 'ActualFanSpeed']);
+              let currentVaneV = getSetting(currentDeviceData, ['vaneVerticalDirection', 'VaneVerticalDirection']);
+              let currentVaneH = getSetting(currentDeviceData, ['vaneHorizontalDirection', 'VaneHorizontalDirection']);
+
               let payloadJson = {
                 power: isPoweredOn(currentDeviceData),
-                operationMode: getSetting(currentDeviceData, ['operationMode', 'OperationMode']) || "Cool",
+                operationMode: getSetting(currentDeviceData, ['operationMode', 'OperationMode']) ?? "Cool",
                 setTemperature: getTemp(currentDeviceData),
-                setFanSpeed: getSetting(currentDeviceData, ['setFanSpeed', 'SetFanSpeed', 'ActualFanSpeed']) || "Auto",
-                vaneVerticalDirection: getSetting(currentDeviceData, ['vaneVerticalDirection', 'VaneVerticalDirection']) || "Auto",
-                vaneHorizontalDirection: getSetting(currentDeviceData, ['vaneHorizontalDirection', 'VaneHorizontalDirection']) || "Auto",
+                setFanSpeed: (currentFan !== null && currentFan !== undefined) ? currentFan : 0,
+                vaneVerticalDirection: (currentVaneV !== null && currentVaneV !== undefined) ? currentVaneV : "Auto",
+                vaneHorizontalDirection: (currentVaneH !== null && currentVaneH !== undefined) ? currentVaneH : "Auto",
                 temperatureIncrementOverride: null,
                 inStandbyMode: getSetting(currentDeviceData, ['inStandbyMode', 'InStandbyMode']) === true ? true : null
               };
@@ -640,9 +644,20 @@ export default {
                     else if (mode === "auto" || mode === "on") payloadJson.operationMode = "Automatic";
                   }
                 }
+                // CORRECTION IMPORTANTE : Traduction des vitesses Google vers des chiffres pour MELCloud
                 if (exec.command === "action.devices.commands.SetFanSpeed") {
-                  payloadJson.setFanSpeed = exec.params?.fanSpeed;
-                  updatedStates.currentFanSpeedSetting = exec.params?.fanSpeed;
+                  const ghSpeed = exec.params?.fanSpeed;
+                  updatedStates.currentFanSpeedSetting = ghSpeed;
+                  
+                  let melSpeed = 0; // Auto par défaut
+                  if (ghSpeed === "One") melSpeed = 1;
+                  else if (ghSpeed === "Two") melSpeed = 2;
+                  else if (ghSpeed === "Three") melSpeed = 3;
+                  else if (ghSpeed === "Four") melSpeed = 4;
+                  else if (ghSpeed === "Five") melSpeed = 5;
+                  else if (ghSpeed === "Auto") melSpeed = 0;
+                  
+                  payloadJson.setFanSpeed = melSpeed;
                 }
               }
 
