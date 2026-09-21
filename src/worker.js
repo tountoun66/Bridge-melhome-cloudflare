@@ -102,18 +102,32 @@ async function getValidAccessToken(env) {
   let oauth = await getOAuth(env);
   if (!oauth?.refresh_token) return null;
 
-  const threeHoursInMs = 10800000;
-  const isOlderThan3Hours = (Date.now() - oauth.updated_at) > threeHoursInMs;
+  const needsRefresh =
+    !oauth.access_token ||
+    !oauth.expires_at ||
+    oauth.expires_at < Date.now() + 300000;
 
-  if (!oauth.expires_at || oauth.expires_at < Date.now() + 300000 || isOlderThan3Hours) {
+  if (needsRefresh) {
     try {
-      console.log("Rafraîchissement du token...");
+      console.log("Rafraîchissement du token MELCloud...");
       oauth = await refreshToken(env, oauth);
     } catch (e) {
-      console.error("Erreur refresh token", e);
+      console.error("Erreur refresh token MELCloud", e);
+
+      const latest = await getOAuth(env);
+      if (
+        latest?.access_token &&
+        latest?.updated_at > oauth.updated_at &&
+        latest?.expires_at > Date.now() + 60000
+      ) {
+        console.log("Un token MELCloud plus récent existe déjà dans D1, réutilisation.");
+        return latest.access_token;
+      }
+
       return null;
     }
   }
+
   return oauth.access_token;
 }
 
@@ -265,15 +279,61 @@ async function loginToMelcloud(email, password, diagnostics) {
 }
 
 async function refreshToken(env, row) {
+  if (!row?.refresh_token) {
+    throw new Error("Aucun refresh_token MELCloud disponible");
+  }
+
   const response = await fetch(TOKEN_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json", "User-Agent": USER_AGENT },
-    body: new URLSearchParams({ grant_type: "refresh_token", client_id: CLIENT_ID, refresh_token: row.refresh_token }).toString()
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+      "User-Agent": USER_AGENT
+    },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      client_id: CLIENT_ID,
+      refresh_token: row.refresh_token
+    }).toString()
   });
+
   const text = await response.text();
   let tokens;
-  try { tokens = JSON.parse(text); } catch(e) { throw new Error(`Refresh token a échoué`); }
-  if (!tokens.refresh_token) tokens.refresh_token = row.refresh_token;
+
+  try {
+    tokens = JSON.parse(text);
+  } catch {
+    throw new Error(`Refresh MELCloud HTTP ${response.status}: réponse JSON invalide`);
+  }
+
+  if (!response.ok) {
+    const latest = await getOAuth(env);
+
+    if (
+      latest?.refresh_token &&
+      latest.refresh_token !== row.refresh_token &&
+      latest?.access_token &&
+      latest?.expires_at > Date.now() + 60000
+    ) {
+      console.log("Refresh concurrent détecté : utilisation du token MELCloud déjà renouvelé.");
+      return latest;
+    }
+
+    const oauthError = tokens?.error || "unknown_error";
+    const description = tokens?.error_description || "";
+    throw new Error(
+      `Refresh MELCloud HTTP ${response.status}: ${oauthError}${description ? ` - ${description}` : ""}`
+    );
+  }
+
+  if (!tokens?.access_token) {
+    throw new Error("MELCloud n'a pas renvoyé d'access_token pendant le refresh");
+  }
+
+  if (!tokens.refresh_token) {
+    tokens.refresh_token = row.refresh_token;
+  }
+
   await saveOAuth(env, tokens);
   return tokens;
 }
