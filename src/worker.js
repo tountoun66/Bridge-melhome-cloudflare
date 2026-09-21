@@ -98,9 +98,40 @@ async function saveOAuth(env, tokens) {
   ).bind(crypto.randomUUID(), tokens.access_token || null, tokens.refresh_token, expiresAt, now, now).run();
 }
 
+async function loginFromCloudflareSecrets(env, reason = "automatic recovery") {
+  const email = String(env.MELCLOUD_EMAIL || "").trim();
+  const password = String(env.MELCLOUD_PASSWORD || "");
+
+  if (!email || !password) {
+    console.warn("Secrets MELCLOUD_EMAIL / MELCLOUD_PASSWORD absents : reconnexion complète impossible.");
+    return null;
+  }
+
+  console.log(`Reconnexion complète MELCloud via Cloudflare Secrets (${reason})...`);
+  const diagnostics = [];
+  const tokens = await loginToMelcloud(email, password, diagnostics);
+
+  if (!tokens?.access_token || !tokens?.refresh_token) {
+    throw new Error("La reconnexion complète MELCloud n'a pas renvoyé les tokens attendus");
+  }
+
+  await saveOAuth(env, tokens);
+  console.log("Reconnexion complète MELCloud réussie.");
+  return tokens;
+}
+
 async function getValidAccessToken(env) {
   let oauth = await getOAuth(env);
-  if (!oauth?.refresh_token) return null;
+
+  if (!oauth?.refresh_token) {
+    try {
+      const recovered = await loginFromCloudflareSecrets(env, "aucun refresh_token disponible");
+      return recovered?.access_token || null;
+    } catch (e) {
+      console.error("Échec reconnexion complète MELCloud", e);
+      return null;
+    }
+  }
 
   const needsRefresh =
     !oauth.access_token ||
@@ -122,6 +153,15 @@ async function getValidAccessToken(env) {
       ) {
         console.log("Un token MELCloud plus récent existe déjà dans D1, réutilisation.");
         return latest.access_token;
+      }
+
+      if (e?.status === 400 || e?.status === 401 || e?.oauthError === "invalid_grant") {
+        try {
+          const recovered = await loginFromCloudflareSecrets(env, e?.oauthError || `HTTP ${e?.status || "auth"}`);
+          return recovered?.access_token || null;
+        } catch (loginError) {
+          console.error("Échec de la reconnexion complète automatique MELCloud", loginError);
+        }
       }
 
       return null;
@@ -321,9 +361,12 @@ async function refreshToken(env, row) {
 
     const oauthError = tokens?.error || "unknown_error";
     const description = tokens?.error_description || "";
-    throw new Error(
+    const error = new Error(
       `Refresh MELCloud HTTP ${response.status}: ${oauthError}${description ? ` - ${description}` : ""}`
     );
+    error.status = response.status;
+    error.oauthError = oauthError;
+    throw error;
   }
 
   if (!tokens?.access_token) {
@@ -755,14 +798,15 @@ export default {
   // TÂCHE DE FOND (CRON TRIGGER)
   async scheduled(event, env, ctx) {
     console.log("Exécution de la tâche planifiée Cron Trigger...");
-    const oauth = await getOAuth(env);
-    if (oauth?.refresh_token) {
-      try {
-        await refreshToken(env, oauth);
-        console.log("Token rafraîchi automatiquement avec succès en arrière-plan.");
-      } catch (e) {
-        console.error("Erreur lors du rafraîchissement automatique (Cron)", e);
+    try {
+      const token = await getValidAccessToken(env);
+      if (token) {
+        console.log("Session MELCloud valide après vérification Cron.");
+      } else {
+        console.error("Cron MELCloud : aucune session valide disponible.");
       }
+    } catch (e) {
+      console.error("Erreur lors de la maintenance automatique de session (Cron)", e);
     }
   }
 };
