@@ -17,6 +17,8 @@ The bridge can persist your authentication tokens using **Cloudflare D1**, so yo
 * 🔐 MELCloud Home authentication
 * 💾 Persistent OAuth/session tokens using Cloudflare D1
 * 🔄 Automatic session reuse
+* ♻️ Automatic MELCloud token refresh
+* 🔐 Automatic full MELCloud re-login if the refresh token is rejected, using Cloudflare Secrets
 * ☁️ Runs entirely on Cloudflare Workers
 * 🔒 HTTP Basic Authentication for the administration interface
 * 🚫 No MELCloud credentials hardcoded in the source code
@@ -172,6 +174,50 @@ Add these two secrets:
 The secret values are stored by Cloudflare and are **not committed to GitHub**, are **not present in `worker.js`**, and are **not written to the repository**.
 
 The bridge first uses the normal OAuth refresh token stored in D1. Only if MELCloud rejects that refresh token (for example with `invalid_grant`) will the Worker use these secrets to perform a new PKCE login automatically and save a fresh token pair to D1.
+
+## How automatic recovery works
+
+The authentication flow is fully automatic once both Cloudflare Secrets are configured:
+
+```text
+Valid access token
+      ↓
+Normal operation
+      ↓
+Access token close to expiry
+      ↓
+Refresh using the refresh_token stored in D1
+      ↓
+   ┌───────────────┐
+   │ Refresh works │
+   └──────┬────────┘
+          ↓
+New access/refresh tokens saved to D1
+
+If MELCloud rejects the refresh token:
+      ↓
+HTTP 400 / HTTP 401 / invalid_grant
+      ↓
+Worker reads MELCLOUD_EMAIL and MELCLOUD_PASSWORD
+from Cloudflare Secrets
+      ↓
+Full MELCloud PKCE login
+      ↓
+New access_token + refresh_token
+      ↓
+Saved automatically to D1
+      ↓
+Google Home continues working
+```
+
+This means that, under normal conditions, **you should not need to manually reconnect MELCloud Home again** after the initial setup.
+
+A manual login may still be required if:
+
+* Your MELCloud Home password is changed
+* Multi-factor authentication or the MELCloud login flow changes
+* Mitsubishi changes or blocks the undocumented authentication flow
+* The Cloudflare Secrets are missing or contain outdated credentials
 
 ---
 
@@ -454,27 +500,30 @@ remain accessible to Google's servers so that the Smart Home integration can fun
 
 ## ❌ Google Home says the device is offline or unavailable
 
-The most likely cause is that your MELCloud authentication token has been revoked.
+The Worker now attempts automatic recovery before requiring any manual action.
 
-This can happen, for example, if you change your MELCloud Home password in the official application.
+It will:
 
-### Solution
+1. Reuse the current access token if it is still valid
+2. Refresh it using the refresh token stored in D1
+3. If MELCloud rejects the refresh token, automatically perform a full PKCE login using the `MELCLOUD_EMAIL` and `MELCLOUD_PASSWORD` Cloudflare Secrets
+4. Save the new access and refresh tokens back to D1
 
-Open your Worker URL:
+### If automatic recovery still fails
+
+First verify that both Cloudflare Secrets still contain the correct MELCloud Home credentials.
+
+If you recently changed your MELCloud Home password, update:
 
 ```text
-https://melhome-bridge.your-username.workers.dev
+MELCLOUD_PASSWORD
 ```
 
-Then select:
+in **Cloudflare → Worker → Settings → Variables and Secrets**.
 
-**🔐 Configure MELCloud**
+You can then open your Worker URL and use **🔐 Configure MELCloud** for a manual login if necessary.
 
-Log in again using your MELCloud Home credentials.
-
-A new authentication token will be obtained and stored in Cloudflare D1.
-
-Google Home should then be able to communicate with your air conditioners again.
+A successful manual login also replaces the token pair stored in D1.
 ---
 update : 
 
