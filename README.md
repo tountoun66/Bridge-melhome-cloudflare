@@ -152,6 +152,29 @@ Click **Deploy**.
 
 ---
 
+# 🔐 Step 3.5 — Add MELCloud credentials as Cloudflare Secrets
+
+To allow the bridge to recover automatically if MELCloud revokes or expires the refresh token, add your MELCloud Home credentials as **Cloudflare Secrets**.
+
+Open your Worker in Cloudflare, then go to:
+
+**Settings → Variables and Secrets**
+
+Add these two secrets:
+
+| Secret name | Value |
+| --- | --- |
+| `MELCLOUD_EMAIL` | Your MELCloud Home email address |
+| `MELCLOUD_PASSWORD` | Your MELCloud Home password |
+
+⚠️ **Create them as Secrets, not plain text variables.**
+
+The secret values are stored by Cloudflare and are **not committed to GitHub**, are **not present in `worker.js`**, and are **not written to the repository**.
+
+The bridge first uses the normal OAuth refresh token stored in D1. Only if MELCloud rejects that refresh token (for example with `invalid_grant`) will the Worker use these secrets to perform a new PKCE login automatically and save a fresh token pair to D1.
+
+---
+
 # 🔑 Step 4 — Connect MELCloud Home
 
 Your Worker will have a URL similar to:
